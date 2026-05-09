@@ -36,7 +36,7 @@ LOADING_TITLE = "Търсене на дистанционното"
 WARN_WIFI_BAND = "Грешна Wi‑Fi лента!"
 WARN_WIFI_SWITCH = "Преминете компютъра към 2,4 GHz мрежа"
 WARN_WIFI_RELOAD = "и натиснете ПРЕЗАРЕДИ."
-WARN_WIFI_ON_SSID = "Свързани сте към „{ssid}“."
+WARN_WIFI_ON_SSID = 'Свързани сте към "{ssid}".'
 WARN_WIFI_ON_5GHZ = "Свързани сте към 5 GHz Wi‑Fi."
 
 OOR_TITLE = "Дистанционното не е в обсег"
@@ -90,7 +90,7 @@ def rounds_count_bg(p: int, r: int) -> str:
 def translate_connection_error(text: str) -> str:
     """Bulgarian user-visible wording for connector ``error`` events."""
     if text.startswith("Python package 'bleak'"):
-        return "Липсва Python пакетът „bleak“."
+        return 'Липсва Python пакетът "bleak".'
     if text.startswith("Connection error:"):
         rest = text.split(":", 1)[1].strip()
         return f"Грешка при свързване: {rest}"
@@ -102,13 +102,13 @@ def translate_worker_status(text: str) -> str:
     if text.startswith("Reading Wi-Fi profile"):
         return "Четене на Wi‑Fi профил..."
     if text.startswith("Scanning BLE for"):
-        return "Търсене по BLE за „OLED-Music“..."
+        return 'Търсене по BLE за "OLED-Music"...'
     m = re.match(r"BLE found (.+), pairing", text)
     if m:
         return f"Намерено BLE устройство {m.group(1)}, свързване..."
     m = re.match(r"Sending Wi-Fi creds for '(.+)'", text)
     if m:
-        return f"Изпращане на Wi‑Fi данни за „{m.group(1)}“..."
+        return f'Изпращане на Wi‑Fi данни за "{m.group(1)}"...'
     m = re.match(r"Opening TCP (.+)", text)
     if m:
         return f"Отваряне на TCP {m.group(1)}..."

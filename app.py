@@ -463,9 +463,6 @@ class App:
         y = h - 42
         txt_surf = self.theme.small_font.render(st.status_text, True, INK)
         txt_rect = txt_surf.get_rect(center=(w // 2, y))
-        shadow = self.theme.small_font.render(st.status_text, True, (0, 0, 0))
-        shadow.set_alpha(115)
-        self.screen.blit(shadow, txt_rect.move(0, 2))
         self.screen.blit(txt_surf, txt_rect)
         if st.last_button_label and (time.monotonic() - st.last_button_at) < 2.5:
             badge = self.theme.small_font.render(
@@ -529,10 +526,6 @@ class App:
             pygame.draw.circle(self.screen, color, (x, y), r)
             pygame.draw.circle(self.screen, (255, 255, 255), (x - r // 3, y - r // 3),
                                max(1, r // 3))
-        draw_doodle_text(self.screen, self.state.status_text,
-                          self.theme.small_font, INK_SOFT,
-                          (panel.centerx, panel.bottom - 38), anchor="center",
-                          shadow=False)
 
     def _draw_warning_screen(self, title: str, lines: list[str], t: float,
                               accent: tuple[int, int, int]) -> None:
