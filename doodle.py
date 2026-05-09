@@ -8,7 +8,7 @@ exposed to ``app.py`` are:
   * `NoteFountain`        -- floating colored music notes that decorate the
                               left and right edges of every screen.
 
-Plus a handful of free functions that draw soft-shadowed panels, chunky
+Plus a handful of free functions that draw frosted-glass panels, chunky
 3D-feeling buttons, crisp text, and the purple trapezoid remote with its
 gray coil antenna.
 """
@@ -76,9 +76,15 @@ NOTE_COLORS = [
 
 
 # --------------------------------------------------------------------------
-# Font discovery — real TTF files render Cyrillic much cleaner than synthetic
-# pygame.bold on random fallbacks.
+# Font discovery — bundled rounded “cartoon” face first (Comfortaa), then
+# playful system fonts (Comic Sans on Windows), then generic UI fallbacks.
+# Real TTF files render Cyrillic cleaner than faux-bold on random fallbacks.
 # --------------------------------------------------------------------------
+
+_DOODLE_DIR = Path(__file__).resolve().parent
+_PACKAGE_FONTS = _DOODLE_DIR / "fonts"
+_BUNDLED_COMFORTAA = _PACKAGE_FONTS / "Comfortaa-Variable.ttf"
+
 
 def _windows_fonts_dir() -> Path:
     return Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
@@ -93,6 +99,33 @@ def _resolve_font_file(*filenames: str) -> Optional[str]:
             if path.is_file():
                 return str(path)
     return None
+
+
+def bundled_cartoon_font_path() -> Optional[str]:
+    """Rounded display font shipped in ``fonts/`` (Comfortaa variable)."""
+    if _BUNDLED_COMFORTAA.is_file():
+        return str(_BUNDLED_COMFORTAA)
+    return None
+
+
+def cartoon_font_heavy_path() -> Optional[str]:
+    """Bolder headline weight: bundled Comfortaa, else Comic Sans Bold."""
+    bundled = bundled_cartoon_font_path()
+    if bundled:
+        return bundled
+    return _resolve_font_file(
+        "comicz.ttf",
+        "Comicbd.ttf",
+        "comicbd.ttf",
+    ) or cartoon_font_regular_path()
+
+
+def cartoon_font_regular_path() -> Optional[str]:
+    """Regular body weight: bundled Comfortaa, else Comic Sans."""
+    bundled = bundled_cartoon_font_path()
+    if bundled:
+        return bundled
+    return _resolve_font_file("comic.ttf", "Comic.ttf") or match_font_fallback()
 
 
 def ui_font_regular_path() -> Optional[str]:
@@ -117,7 +150,8 @@ def ui_font_bold_path() -> Optional[str]:
 def match_font_fallback() -> Optional[str]:
     try:
         return pygame.font.match_font(
-            "segoe ui,segoeui,calibri,candara,trebuchet ms,arial"
+            "comfortaa,nunito semibold,nunito,comic sans ms,fredoka one,"
+            "coiny,baloo 2,segoe ui,calibri,candara,trebuchet ms,arial"
         )
     except Exception:
         return None
@@ -127,15 +161,15 @@ def make_main_menu_hint_fonts(screen_w: int, screen_h: int
                                ) -> tuple[pygame.font.Font, pygame.font.Font]:
     """Smaller, tight headline + body for the lines under the logo."""
     fb = match_font_fallback()
-    head_path = ui_font_semibold_path() or ui_font_bold_path() \
-        or ui_font_regular_path() or fb
-    sub_path = ui_font_regular_path() or fb
+    head_path = (cartoon_font_heavy_path()
+                 or ui_font_semibold_path() or ui_font_bold_path() or fb)
+    sub_path = cartoon_font_regular_path() or ui_font_regular_path() or fb
     # Compact sizes; respect vertical space on short windows.
     head_px = max(15, min(20, min(screen_w // 56, screen_h // 42)))
     sub_px = max(12, min(16, min(screen_w // 72, screen_h // 52)))
-    head = pygame.font.Font(head_path, head_px)
+    head = pygame.font.Font(head_path, head_px) if head_path else pygame.font.Font(None, head_px)
     head.set_bold(False)
-    sub = pygame.font.Font(sub_path, sub_px)
+    sub = pygame.font.Font(sub_path, sub_px) if sub_path else pygame.font.Font(None, sub_px)
     sub.set_bold(False)
     return head, sub
 
@@ -165,21 +199,21 @@ class Theme:
 
     @classmethod
     def make(cls) -> "Theme":
-        fb = match_font_fallback()
-        reg = ui_font_regular_path()
-        bold = ui_font_bold_path()
-        semi = ui_font_semibold_path()
-        title_path = bold or semi or reg or fb
-        body_path = reg or fb
-        huge_path = bold or semi or title_path
+        heavy_path = (cartoon_font_heavy_path()
+                      or ui_font_bold_path() or ui_font_semibold_path()
+                      or ui_font_regular_path() or match_font_fallback())
+        body_path = (cartoon_font_regular_path() or ui_font_regular_path()
+                     or match_font_fallback())
 
-        title = pygame.font.Font(title_path, 34)
-        title.set_bold(False)
-        huge = pygame.font.Font(huge_path, 122)
-        huge.set_bold(False)
-        body = pygame.font.Font(body_path, 21)
-        body.set_bold(False)
-        small = pygame.font.Font(body_path, 15)
+        def _font(path: Optional[str], px: int) -> pygame.font.Font:
+            f = pygame.font.Font(path, px) if path else pygame.font.Font(None, px)
+            f.set_bold(False)
+            return f
+
+        title = _font(heavy_path, 34)
+        huge = _font(heavy_path, 122)
+        body = _font(body_path, 21)
+        small = _font(body_path, 15)
         try:
             mono_name = pygame.font.match_font(
                 "jetbrainsmono,consolas,couriernew,monospace"
@@ -411,29 +445,76 @@ def _shade(color: tuple[int, int, int], factor: float) -> tuple[int, int, int]:
 
 def draw_doodle_panel(surface: pygame.Surface, rect: pygame.Rect,
                       fill: tuple[int, int, int] = PANEL_FILL,
-                      outline: tuple[int, int, int] = PANEL_OUTLINE,
+                      outline: Optional[tuple[int, int, int]] = PANEL_OUTLINE,
                       radius: int = 24, seed: int = 0) -> None:
-    """Soft-shadowed rounded panel.
+    """Frosted glass card over the starfield — translucent fill, soft shadow,
+    thin rim. Used by every modal-style screen so the background stays visible.
 
-    ``seed`` is accepted for API compatibility but no longer used to
-    randomise the outline — the new look is clean, not hand-drawn.
+    ``seed`` is unused (kept for call-site compatibility).
     """
-    del seed  # unused, kept for back-compat with existing call sites
-    shadow = rect.move(0, 8)
-    shadow_surf = pygame.Surface((rect.width + 24, rect.height + 24), pygame.SRCALPHA)
-    pygame.draw.rect(shadow_surf, (*PANEL_SHADOW, 130),
-                     pygame.Rect(12, 12, rect.width, rect.height),
-                     border_radius=radius + 2)
-    surface.blit(shadow_surf, (shadow.left - 12, shadow.top - 12))
-    pygame.draw.rect(surface, fill, rect, border_radius=radius)
-    # Inner highlight band along the top edge for a glassy feel.
-    hl = pygame.Surface((rect.width - 8, max(1, radius)), pygame.SRCALPHA)
-    pygame.draw.rect(hl, (255, 255, 255, 22),
-                     pygame.Rect(0, 0, hl.get_width(), hl.get_height()),
-                     border_radius=radius)
-    surface.blit(hl, (rect.left + 4, rect.top + 2))
+    del seed
+    pad = 18
+    lw = rect.width + pad * 2
+    lh = rect.height + pad * 2
+    layer = pygame.Surface((lw, lh), pygame.SRCALPHA)
+    inner = pygame.Rect(pad, pad, rect.width, rect.height)
+
+    # Compact shadow (no huge drop slab).
+    pygame.draw.rect(
+        layer,
+        (0, 0, 0, 62),
+        inner.move(1, 5),
+        border_radius=radius + 1,
+    )
+
+    # Translucent tint — stars still read through.
+    ga = 112
+    pygame.draw.rect(
+        layer,
+        (fill[0], fill[1], fill[2], ga),
+        inner,
+        border_radius=radius,
+    )
+
+    # Very soft top sheen.
+    sheen_h = max(3, radius // 2)
+    sheen_w = max(1, inner.width - 14)
+    sheen = pygame.Surface((sheen_w, sheen_h), pygame.SRCALPHA)
+    pygame.draw.rect(
+        sheen,
+        (255, 255, 255, 24),
+        sheen.get_rect(),
+        border_radius=max(2, sheen_h // 2),
+    )
+    layer.blit(sheen, (pad + 7, pad + 4))
+
+    # Hairline rim — accent colour from callers (purple / pink / green).
     if outline is not None:
-        pygame.draw.rect(surface, outline, rect, width=2, border_radius=radius)
+        if outline == PANEL_OUTLINE:
+            rim = (255, 255, 255, 46)
+        else:
+            rim = (outline[0], outline[1], outline[2], 118)
+        pygame.draw.rect(layer, rim, inner, width=1, border_radius=radius)
+        if outline != PANEL_OUTLINE and inner.width > 120:
+            pygame.draw.rect(
+                layer,
+                (255, 255, 255, 20),
+                inner.inflate(-3, -3),
+                width=1,
+                border_radius=max(4, radius - 3),
+            )
+
+    else:
+        pygame.draw.rect(
+            layer,
+            (255, 255, 255, 42),
+            inner,
+            width=1,
+            border_radius=radius,
+        )
+
+    dst = (rect.left - pad, rect.top - pad)
+    surface.blit(layer, dst)
 
 
 def draw_chunky_button(surface: pygame.Surface, rect: pygame.Rect, label: str,

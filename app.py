@@ -28,15 +28,14 @@ from doodle import (
     ACCENT_BLUE, ACCENT_CYAN, ACCENT_GREEN, ACCENT_PINK,
     ACCENT_RED, ACCENT_YELLOW, INK, INK_DIM, INK_SOFT,
     NoteFountain, PANEL_FILL, PANEL_HI, PURPLE, Theme,
-    build_note_palette, draw_background, draw_chunky_button,
+    build_note_palette, cartoon_font_heavy_path, draw_background, draw_chunky_button,
     draw_crisp_label, draw_doodle_panel, draw_doodle_text,
     draw_remote_placeholder,
     load_image_alpha, make_main_menu_hint_fonts, scale_menu_logo,
 )
-from esp32_connector import (
-    BUTTON_NAMES, Esp32Connector, Event, NUMPAD_BUTTONS,
-)
-import strings_bg as BG
+from esp32_connector import Esp32Connector, Event, NUMPAD_BUTTONS
+import strings_bg
+import strings_en
 
 ROOT = Path(__file__).parent
 LOGOS = ROOT / "logos"
@@ -110,6 +109,14 @@ KEY_DIGIT_MAP = {
     pygame.K_KP0: 10, pygame.K_0: 10,
 }
 
+# Remote: press check (button 1), then numpad 1 (button 9) within
+# LANG_CHORD_WINDOW_S toggles UI language. Keyboard: hold ` (backtick) and
+# press Numpad 1. Not active during the button-check screen.
+LANG_TOGGLE_CHECK_BTN = 1
+LANG_TOGGLE_NUMPAD1_BTN = 9
+LANG_CHORD_WINDOW_S = 0.65
+LANG_KEYBOARD_HOLD_KEYS = (pygame.K_BACKQUOTE,)
+
 
 class Screen(Enum):
     SETUP = auto()
@@ -127,7 +134,7 @@ class Screen(Enum):
 @dataclass
 class AppState:
     screen: Screen = Screen.SETUP
-    status_text: str = BG.STATUS_DEFAULT
+    status_text: str = ""
     last_error: str = ""
     last_5ghz_ssid: str = ""
     button_check_idx: int = 0
@@ -138,16 +145,18 @@ class AppState:
     last_button_label: str = ""
     last_button_at: float = 0.0
     fullscreen: bool = False
+    lang_check_armed_until: float = 0.0
 
 
 class App:
     def __init__(self) -> None:
         pygame.init()
-        pygame.display.set_caption(BG.WINDOW_TITLE)
+        self.L = strings_en
+        pygame.display.set_caption(self.L.WINDOW_TITLE)
         self.screen = pygame.display.set_mode(WINDOW_SIZE, _WINDOW_FLAGS)
         self.clock = pygame.time.Clock()
         self.theme = Theme.make()
-        self.state = AppState()
+        self.state = AppState(status_text=self.L.STATUS_DEFAULT)
         self.connector = Esp32Connector()
 
         # Load the game logo + note PNGs.
@@ -198,6 +207,27 @@ class App:
         margin = 130 if w >= 1100 else 110
         self.left_notes.resize(pygame.Rect(0, 0, margin, h))
         self.right_notes.resize(pygame.Rect(w - margin, 0, margin, h))
+
+    def _lang_toggle_allowed_screen(self) -> bool:
+        return self.state.screen != Screen.BUTTON_CHECK
+
+    def _toggle_locale(self) -> None:
+        self.L = strings_bg if self.L is strings_en else strings_en
+        pygame.display.set_caption(self.L.WINDOW_TITLE)
+        self.state.lang_check_armed_until = 0.0
+
+    def _keyboard_lang_hold_active(self) -> bool:
+        return any(pygame.key.get_pressed()[k] for k in LANG_KEYBOARD_HOLD_KEYS)
+
+    def _try_keyboard_lang_toggle(self, event: pygame.event.Event) -> bool:
+        if not self._lang_toggle_allowed_screen():
+            return False
+        if event.key != pygame.K_KP1:
+            return False
+        if not self._keyboard_lang_hold_active():
+            return False
+        self._toggle_locale()
+        return True
 
     def _scaled_menu_logo(self, max_w: int, max_h: int) -> Optional[pygame.Surface]:
         if self.game_logo is None:
@@ -258,36 +288,50 @@ class App:
         st = self.state
         if ev.kind == "status":
             if st.screen in (Screen.LOADING, Screen.OUT_OF_RANGE, Screen.BAND_5GHZ):
-                st.status_text = BG.translate_worker_status(ev.text)
+                st.status_text = self.L.translate_worker_status(ev.text)
         elif ev.kind == "error":
             if ev.text.startswith("NET5GHZ:"):
                 _, ssid, _ = (ev.text.split(":", 2) + ["", ""])[:3]
                 st.last_5ghz_ssid = ssid
                 self.set_screen(Screen.BAND_5GHZ,
-                                status=BG.STATUS_5GHZ)
+                                status=self.L.STATUS_5GHZ)
             elif ev.text == "OUTOFRANGE":
                 self.set_screen(Screen.OUT_OF_RANGE,
-                                status=BG.STATUS_OOR)
+                                status=self.L.STATUS_OOR)
             else:
                 st.last_error = ev.text
                 if st.screen in (Screen.LOADING, Screen.CONNECTED_OK,
                                   Screen.BUTTON_CHECK):
                     self.set_screen(Screen.OUT_OF_RANGE,
-                                    status=BG.STATUS_LOST_LINK.format(
-                                        err=BG.translate_connection_error(ev.text)))
+                                    status=self.L.STATUS_LOST_LINK.format(
+                                        err=self.L.translate_connection_error(ev.text)))
         elif ev.kind == "connected":
             self.set_screen(Screen.CONNECTED_OK,
-                            status=BG.STATUS_CONNECTED.format(addr=ev.text))
+                            status=self.L.STATUS_CONNECTED.format(addr=ev.text))
         elif ev.kind == "disconnected":
             if st.screen not in (Screen.SETUP, Screen.BAND_5GHZ):
                 self.set_screen(Screen.OUT_OF_RANGE,
-                                status=BG.STATUS_DISCONNECTED)
+                                status=self.L.STATUS_DISCONNECTED)
         elif ev.kind == "button":
             self._on_button(ev)
 
     def _on_button(self, ev: Event) -> None:
         st = self.state
-        st.last_button_label = ev.text
+        if self._lang_toggle_allowed_screen():
+            if ev.button == LANG_TOGGLE_CHECK_BTN:
+                st.lang_check_armed_until = time.monotonic() + LANG_CHORD_WINDOW_S
+            elif (
+                ev.button == LANG_TOGGLE_NUMPAD1_BTN
+                and ev.digit == 1
+                and time.monotonic() < st.lang_check_armed_until
+            ):
+                self._toggle_locale()
+                return
+        if ev.button is not None:
+            st.last_button_label = self.L.BUTTON_NAMES.get(
+                ev.button, self.L.FB_FALLBACK_BUTTON.format(n=ev.button))
+        else:
+            st.last_button_label = ev.text
         st.last_button_at = time.monotonic()
         if st.screen == Screen.BUTTON_CHECK:
             if ev.button is not None:
@@ -308,7 +352,7 @@ class App:
     def _pick_player_count(self, n: int) -> None:
         self.state.player_count = n
         self.set_screen(Screen.ROUND_SELECT,
-                        status=BG.STATUS_ROUNDS)
+                        status=self.L.STATUS_ROUNDS)
 
     def _pick_round_count(self, n: int) -> None:
         self.state.round_count = n
@@ -355,6 +399,8 @@ class App:
 
     def _handle_keydown(self, event: pygame.event.Event) -> None:
         st = self.state
+        if self._try_keyboard_lang_toggle(event):
+            return
         if event.key == pygame.K_RETURN or event.key == pygame.K_SPACE:
             if st.screen == Screen.SETUP:
                 self._start_connection()
@@ -397,18 +443,18 @@ class App:
 
     def _start_connection(self) -> None:
         self.set_screen(Screen.LOADING,
-                        status=BG.STATUS_SEARCHING_BLE)
+                        status=self.L.STATUS_SEARCHING_BLE)
         self.connector.start()
 
     def _reload(self) -> None:
-        self.set_screen(Screen.LOADING, status=BG.STATUS_RETRYING)
+        self.set_screen(Screen.LOADING, status=self.L.STATUS_RETRYING)
         self.connector.request_immediate_reconnect()
 
     def _begin_button_check(self) -> None:
         self.state.button_check_idx = 0
         self.state.button_check_done = {}
         self.set_screen(Screen.BUTTON_CHECK,
-                        status=BG.STATUS_BUTTON_CHECK)
+                        status=self.L.STATUS_BUTTON_CHECK)
 
     # ------------------------------------------------------------------ update
 
@@ -420,7 +466,7 @@ class App:
             elapsed = time.monotonic() - st.countdown_start
             if elapsed >= 11:
                 self.set_screen(Screen.PLAYING,
-                                status=BG.PLAYING_STATUS)
+                                status=self.L.PLAYING_STATUS)
 
     # ------------------------------------------------------------------ draw
 
@@ -479,29 +525,29 @@ class App:
         draw_doodle_panel(self.screen, panel, fill=PANEL_FILL,
                            outline=PURPLE, radius=28)
         # Wordmark above the headline.
-        draw_doodle_text(self.screen, BG.TITLE_WORDMARK,
+        draw_doodle_text(self.screen, self.L.TITLE_WORDMARK,
                           self.theme.body_font, ACCENT_CYAN,
                           (panel.centerx, panel.top + 44), anchor="center",
                           shadow=False)
-        draw_doodle_text(self.screen, BG.TITLE_APP,
+        draw_doodle_text(self.screen, self.L.TITLE_APP,
                           self.theme.title_font, INK,
                           (panel.centerx, panel.top + 90), anchor="center")
         # Underline accent.
         ul = pygame.Rect(0, 0, 110, 5)
         ul.center = (panel.centerx, panel.top + 122)
         pygame.draw.rect(self.screen, ACCENT_PINK, ul, border_radius=3)
-        draw_doodle_text(self.screen, BG.SETUP_LINE1,
+        draw_doodle_text(self.screen, self.L.SETUP_LINE1,
                           self.theme.body_font, INK_SOFT,
                           (panel.centerx, panel.top + 175), anchor="center",
                           shadow=False)
-        draw_doodle_text(self.screen, BG.SETUP_LINE2,
+        draw_doodle_text(self.screen, self.L.SETUP_LINE2,
                           self.theme.body_font, INK_SOFT,
                           (panel.centerx, panel.top + 205), anchor="center",
                           shadow=False)
         self.start_button_rect = pygame.Rect(0, 0, 260, 88)
         self.start_button_rect.center = (panel.centerx, panel.bottom - 80)
         mouse = pygame.mouse.get_pos()
-        draw_chunky_button(self.screen, self.start_button_rect, BG.BTN_START,
+        draw_chunky_button(self.screen, self.start_button_rect, self.L.BTN_START,
                             self.theme, fill=ACCENT_GREEN,
                             text_color=(15, 25, 30),
                             hovered=self.start_button_rect.collidepoint(mouse))
@@ -511,7 +557,7 @@ class App:
         panel = self._panel_rect(560, 320, dy=-10)
         draw_doodle_panel(self.screen, panel, fill=PANEL_FILL,
                            outline=PURPLE, radius=28)
-        draw_doodle_text(self.screen, BG.LOADING_TITLE,
+        draw_doodle_text(self.screen, self.L.LOADING_TITLE,
                           self.theme.title_font, INK,
                           (panel.centerx, panel.top + 72), anchor="center")
         # Five neon dots traveling in a wave.
@@ -544,20 +590,20 @@ class App:
         self.reload_button_rect = pygame.Rect(0, 0, 230, 74)
         self.reload_button_rect.center = (panel.centerx, panel.bottom - 64)
         mouse = pygame.mouse.get_pos()
-        draw_chunky_button(self.screen, self.reload_button_rect, BG.BTN_RELOAD,
+        draw_chunky_button(self.screen, self.reload_button_rect, self.L.BTN_RELOAD,
                             self.theme, fill=accent, text_color=(20, 20, 30),
                             hovered=self.reload_button_rect.collidepoint(mouse))
 
     def _draw_band_5ghz(self, t: float) -> None:
-        ssid_line = (BG.WARN_WIFI_ON_SSID.format(ssid=self.state.last_5ghz_ssid)
+        ssid_line = (self.L.WARN_WIFI_ON_SSID.format(ssid=self.state.last_5ghz_ssid)
                      if self.state.last_5ghz_ssid
-                     else BG.WARN_WIFI_ON_5GHZ)
+                     else self.L.WARN_WIFI_ON_5GHZ)
         self._draw_warning_screen(
-            BG.WARN_WIFI_BAND,
+            self.L.WARN_WIFI_BAND,
             [
                 ssid_line,
-                BG.WARN_WIFI_SWITCH,
-                BG.WARN_WIFI_RELOAD,
+                self.L.WARN_WIFI_SWITCH,
+                self.L.WARN_WIFI_RELOAD,
             ],
             t, accent=ACCENT_PINK,
         )
@@ -567,7 +613,7 @@ class App:
         panel = self._panel_rect(660, 540, dy=-10)
         draw_doodle_panel(self.screen, panel, fill=PANEL_FILL,
                            outline=ACCENT_PINK, radius=28)
-        draw_doodle_text(self.screen, BG.OOR_TITLE,
+        draw_doodle_text(self.screen, self.L.OOR_TITLE,
                           self.theme.title_font, ACCENT_PINK,
                           (panel.centerx, panel.top + 50), anchor="center")
         ul = pygame.Rect(0, 0, 110, 5)
@@ -578,14 +624,14 @@ class App:
                                   (panel.centerx, panel.centery + 40),
                                   self.theme, t, scale=0.6,
                                   include_numpad=False)
-        draw_doodle_text(self.screen, BG.OOR_BODY,
+        draw_doodle_text(self.screen, self.L.OOR_BODY,
                           self.theme.body_font, INK_SOFT,
                           (panel.centerx, panel.bottom - 96), anchor="center",
                           shadow=False)
         self.reload_button_rect = pygame.Rect(0, 0, 240, 64)
         self.reload_button_rect.center = (panel.centerx, panel.bottom - 46)
         mouse = pygame.mouse.get_pos()
-        draw_chunky_button(self.screen, self.reload_button_rect, BG.BTN_RETRY_NOW,
+        draw_chunky_button(self.screen, self.reload_button_rect, self.L.BTN_RETRY_NOW,
                             self.theme, fill=ACCENT_CYAN,
                             text_color=(15, 25, 30),
                             hovered=self.reload_button_rect.collidepoint(mouse))
@@ -595,7 +641,7 @@ class App:
         panel = self._panel_rect(660, 560, dy=-20)
         draw_doodle_panel(self.screen, panel, fill=PANEL_FILL,
                            outline=ACCENT_GREEN, radius=28)
-        draw_doodle_text(self.screen, BG.CONNECTED_TITLE,
+        draw_doodle_text(self.screen, self.L.CONNECTED_TITLE,
                           self.theme.title_font, ACCENT_GREEN,
                           (panel.centerx, panel.top + 50), anchor="center")
         ul = pygame.Rect(0, 0, 90, 5)
@@ -606,14 +652,14 @@ class App:
                                   (panel.centerx, panel.centery + 30),
                                   self.theme, t, scale=0.7)
         draw_doodle_text(self.screen,
-                          BG.CONNECTED_HINT,
+                          self.L.CONNECTED_HINT,
                           self.theme.small_font, INK_SOFT,
                           (panel.centerx, panel.bottom - 96), anchor="center",
                           shadow=False)
         self.skip_button_rect = pygame.Rect(0, 0, 250, 64)
         self.skip_button_rect.center = (panel.centerx, panel.bottom - 46)
         mouse = pygame.mouse.get_pos()
-        draw_chunky_button(self.screen, self.skip_button_rect, BG.BTN_CONTINUE,
+        draw_chunky_button(self.screen, self.skip_button_rect, self.L.BTN_CONTINUE,
                             self.theme, fill=ACCENT_GREEN,
                             text_color=(15, 30, 25),
                             hovered=self.skip_button_rect.collidepoint(mouse))
@@ -622,26 +668,27 @@ class App:
         st = self.state
         w, h = self.screen.get_size()
         can_continue = self._button_check_can_continue()
-        panel = self._panel_rect(min(w - 80, 800), min(h - 80, 560), dy=0)
+        # Shorter card + slight lift so the grid clears the bottom status line.
+        panel = self._panel_rect(min(w - 96, 780), min(h - 132, 528), dy=-12)
         draw_doodle_panel(self.screen, panel, fill=PANEL_FILL,
                            outline=PURPLE, radius=28)
-        draw_doodle_text(self.screen, BG.BUTTON_CHECK_TITLE,
+        draw_doodle_text(self.screen, self.L.BUTTON_CHECK_TITLE,
                           self.theme.title_font, INK,
                           (panel.centerx, panel.top + 50), anchor="center")
         if can_continue:
-            draw_doodle_text(self.screen, BG.BUTTON_CHECK_DONE,
+            draw_doodle_text(self.screen, self.L.BUTTON_CHECK_DONE,
                               self.theme.body_font, ACCENT_GREEN,
                               (panel.centerx, panel.top + 95), anchor="center",
                               shadow=False)
-            draw_doodle_text(self.screen, BG.BUTTON_CHECK_KEYS,
+            draw_doodle_text(self.screen, self.L.BUTTON_CHECK_KEYS,
                               self.theme.small_font, INK_SOFT,
                               (panel.centerx, panel.top + 126), anchor="center",
                               shadow=False)
         elif st.button_check_idx < len(BUTTON_CHECK_SEQUENCE):
             target_btn = BUTTON_CHECK_SEQUENCE[st.button_check_idx]
-            target_name = BUTTON_NAMES.get(
-                target_btn, BG.FB_FALLBACK_BUTTON.format(n=target_btn))
-            draw_doodle_text(self.screen, BG.BUTTON_CHECK_PRESS.format(label=target_name),
+            target_name = self.L.BUTTON_NAMES.get(
+                target_btn, self.L.FB_FALLBACK_BUTTON.format(n=target_btn))
+            draw_doodle_text(self.screen, self.L.BUTTON_CHECK_PRESS.format(label=target_name),
                               self.theme.body_font, ACCENT_PINK,
                               (panel.centerx, panel.top + 95), anchor="center",
                               shadow=False)
@@ -674,7 +721,8 @@ class App:
                 fill = PANEL_HI
                 ink = INK_SOFT
             self._draw_tile(tile, fill, label_color=ink,
-                              label=BUTTON_NAMES.get(btn, BG.FB_FALLBACK_BUTTON.format(n=btn)),
+                              label=self.L.BUTTON_NAMES.get(
+                                  btn, self.L.FB_FALLBACK_BUTTON.format(n=btn)),
                               done=done)
         if can_continue:
             self.button_check_continue_rect = pygame.Rect(0, 0, 290, 72)
@@ -682,7 +730,7 @@ class App:
                 panel.centerx, panel.bottom - 24)
             mouse = pygame.mouse.get_pos()
             draw_chunky_button(
-                self.screen, self.button_check_continue_rect, BG.BTN_CONTINUE,
+                self.screen, self.button_check_continue_rect, self.L.BTN_CONTINUE,
                 self.theme, fill=ACCENT_GREEN, text_color=(15, 30, 25),
                 hovered=self.button_check_continue_rect.collidepoint(mouse),
             )
@@ -728,7 +776,7 @@ class App:
         txt = self.theme.small_font.render(label, True, label_color)
         self.screen.blit(txt, txt.get_rect(center=tile.center))
         if done:
-            check = self.theme.title_font.render(BG.TILE_OK, True, (15, 30, 25))
+            check = self.theme.title_font.render(self.L.TILE_OK, True, (15, 30, 25))
             self.screen.blit(check,
                                check.get_rect(midright=(tile.right - 12,
                                                           tile.top + 18)))
@@ -747,7 +795,7 @@ class App:
             self.screen.blit(logo, lr)
             hints_top = lr.bottom + 14
         elif not self.game_logo:
-            draw_doodle_text(self.screen, BG.MAIN_MENU_FALLBACK,
+            draw_doodle_text(self.screen, self.L.MAIN_MENU_FALLBACK,
                               self.theme.huge_font, INK,
                               (w // 2, logo_cy), anchor="center")
             hints_top = logo_cy + self.theme.huge_font.get_height() // 2 + 14
@@ -756,29 +804,30 @@ class App:
 
         hint_head, hint_sub = make_main_menu_hint_fonts(w, h)
         cx = w // 2
-        r1 = draw_crisp_label(self.screen, hint_head, BG.MAIN_MENU_LINE1,
+        r1 = draw_crisp_label(self.screen, hint_head, self.L.MAIN_MENU_LINE1,
                                INK, (cx, hints_top), anchor="midtop")
-        draw_crisp_label(self.screen, hint_sub, BG.MAIN_MENU_LINE2,
+        draw_crisp_label(self.screen, hint_sub, self.L.MAIN_MENU_LINE2,
                           INK_SOFT, (cx, r1.bottom + 6), anchor="midtop")
 
     def _draw_round_select(self, t: float) -> None:
         w, h = self.screen.get_size()
         head_size = max(56, min(96, w // 14))
-        head_font = pygame.font.Font(pygame.font.match_font(
-            "segoe ui,segoeui,nunitoblack,nunito,poppins,segoeuiblack,segoeui,arial"
-        ), head_size)
-        head_font.set_bold(True)
+        face_heavy = (cartoon_font_heavy_path()
+                      or pygame.font.match_font(
+                          "comfortaa,nunito semibold,comic sans ms,segoe ui,arial"))
+        head_font = pygame.font.Font(face_heavy, head_size) if face_heavy else pygame.font.Font(None, head_size)
+        head_font.set_bold(False)
         draw_doodle_text(self.screen,
-                          BG.players_phrase(self.state.player_count),
+                          self.L.players_phrase(self.state.player_count),
                           self.theme.title_font, ACCENT_CYAN,
                           (w // 2, 90), anchor="center", shadow=False)
-        draw_doodle_text(self.screen, BG.ROUND_TITLE,
+        draw_doodle_text(self.screen, self.L.ROUND_TITLE,
                           head_font, INK,
                           (w // 2, 170), anchor="center")
         ul = pygame.Rect(0, 0, 200, 6)
         ul.center = (w // 2, 170 + head_size // 2 + 14)
         pygame.draw.rect(self.screen, ACCENT_PINK, ul, border_radius=3)
-        draw_doodle_text(self.screen, BG.ROUND_HINT,
+        draw_doodle_text(self.screen, self.L.ROUND_HINT,
                           self.theme.body_font, INK_SOFT,
                           (w // 2, ul.bottom + 32), anchor="center", shadow=False)
         # Chunky 5×2 number pad sized to fit the available area.
@@ -797,11 +846,12 @@ class App:
         accents = [ACCENT_PINK, ACCENT_CYAN, ACCENT_YELLOW, ACCENT_GREEN, PURPLE,
                    ACCENT_BLUE, (255, 159, 67), ACCENT_RED,
                    ACCENT_PINK, ACCENT_CYAN]
-        digit_font = pygame.font.Font(pygame.font.match_font(
-            "segoe ui,segoeui,nunitoblack,nunito,poppins,segoeuiblack,segoeui,arial"
-        ),
-            max(28, cell // 2))
-        digit_font.set_bold(True)
+        digit_face = (cartoon_font_heavy_path()
+                      or pygame.font.match_font(
+                          "comfortaa,nunito semibold,comic sans ms,segoe ui,arial"))
+        digit_font = pygame.font.Font(digit_face, max(28, cell // 2)) if digit_face else pygame.font.Font(
+            None, max(28, cell // 2))
+        digit_font.set_bold(False)
         for i, n in enumerate([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]):
             row, col = divmod(i, pad_cols)
             tile = pygame.Rect(0, 0, cell, cell)
@@ -821,7 +871,7 @@ class App:
         cx, cy = w // 2, h // 2
         if remaining == 0:
             color = ACCENT_GREEN
-            label = BG.COUNTDOWN_GO
+            label = self.L.COUNTDOWN_GO
         else:
             color = accents[(10 - remaining) % len(accents)]
             label = str(remaining)
@@ -846,22 +896,22 @@ class App:
             self.screen.blit(ghost, ghost.get_rect(center=(cx, cy)))
         self.screen.blit(big, big.get_rect(center=(cx, cy)))
         draw_doodle_text(self.screen,
-                          BG.rounds_count_bg(self.state.player_count,
+                          self.L.rounds_count_bg(self.state.player_count,
                                              self.state.round_count),
                           self.theme.body_font, INK_SOFT,
                           (cx, cy + 220), anchor="center", shadow=False)
 
     def _draw_playing(self, t: float) -> None:
         w, h = self.screen.get_size()
-        draw_doodle_text(self.screen, BG.PLAYING_TITLE,
+        draw_doodle_text(self.screen, self.L.PLAYING_TITLE,
                           self.theme.huge_font, ACCENT_GREEN,
                           (w // 2, h // 2 - 60), anchor="center")
         draw_doodle_text(self.screen,
-                          BG.rounds_count_bg(self.state.player_count,
+                          self.L.rounds_count_bg(self.state.player_count,
                                                self.state.round_count),
                           self.theme.title_font, INK,
                           (w // 2, h // 2 + 60), anchor="center", shadow=False)
-        draw_doodle_text(self.screen, BG.PLAYING_NOTE,
+        draw_doodle_text(self.screen, self.L.PLAYING_NOTE,
                           self.theme.small_font, INK_DIM,
                           (w // 2, h // 2 + 140), anchor="center", shadow=False)
 
