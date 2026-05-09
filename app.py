@@ -29,8 +29,9 @@ from doodle import (
     ACCENT_RED, ACCENT_YELLOW, INK, INK_DIM, INK_SOFT,
     NoteFountain, PANEL_FILL, PANEL_HI, PURPLE, Theme,
     build_note_palette, draw_background, draw_chunky_button,
-    draw_doodle_panel, draw_doodle_text, draw_remote_placeholder,
-    load_image_alpha, scale_menu_logo,
+    draw_crisp_label, draw_doodle_panel, draw_doodle_text,
+    draw_remote_placeholder,
+    load_image_alpha, make_main_menu_hint_fonts, scale_menu_logo,
 )
 from esp32_connector import (
     BUTTON_NAMES, Esp32Connector, Event, NUMPAD_BUTTONS,
@@ -302,8 +303,7 @@ class App:
 
     def _finish_button_check(self) -> None:
         self.go_fullscreen()
-        self.set_screen(Screen.MAIN_MENU,
-                        status=BG.STATUS_MAIN_MENU)
+        self.set_screen(Screen.MAIN_MENU, status="")
 
     def _pick_player_count(self, n: int) -> None:
         self.state.player_count = n
@@ -742,25 +742,31 @@ class App:
 
     def _draw_main_menu(self, t: float) -> None:
         w, h = self.screen.get_size()
-        banner_reserve = 200
-        # Compact logo box — large max bounds force upscale of small assets → blur.
+        banner_reserve = 160
         max_logo_w = max(160, min(380, int(w * 0.38)))
         max_logo_h = max(120, min(200, int((h - banner_reserve) * 0.30)))
         logo = self._scaled_menu_logo(max_logo_w, max_logo_h)
+        # Anchor logo slightly above centre so hints fit comfortably underneath.
+        logo_cy = h // 2 - max(56, min(110, h // 14))
+
         if logo is not None:
-            self.screen.blit(logo, logo.get_rect(center=(w // 2, h // 2 - 38)))
+            lr = logo.get_rect(center=(w // 2, logo_cy))
+            self.screen.blit(logo, lr)
+            hints_top = lr.bottom + 14
         elif not self.game_logo:
             draw_doodle_text(self.screen, BG.MAIN_MENU_FALLBACK,
                               self.theme.huge_font, INK,
-                              (w // 2, h // 2 - 30), anchor="center")
-        draw_doodle_text(self.screen, BG.MAIN_MENU_LINE1,
-                          self.theme.title_font, INK,
-                          (w // 2, h - 118), anchor="center",
-                          shadow=False)
-        draw_doodle_text(self.screen, BG.MAIN_MENU_LINE2,
-                          self.theme.body_font, INK_SOFT,
-                          (w // 2, h - 74), anchor="center",
-                          shadow=False)
+                              (w // 2, logo_cy), anchor="center")
+            hints_top = logo_cy + self.theme.huge_font.get_height() // 2 + 14
+        else:
+            hints_top = logo_cy + 48
+
+        hint_head, hint_sub = make_main_menu_hint_fonts(w, h)
+        cx = w // 2
+        r1 = draw_crisp_label(self.screen, hint_head, BG.MAIN_MENU_LINE1,
+                               INK, (cx, hints_top), anchor="midtop")
+        draw_crisp_label(self.screen, hint_sub, BG.MAIN_MENU_LINE2,
+                          INK_SOFT, (cx, r1.bottom + 6), anchor="midtop")
 
     def _draw_round_select(self, t: float) -> None:
         w, h = self.screen.get_size()

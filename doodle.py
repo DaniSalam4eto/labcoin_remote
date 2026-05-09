@@ -16,6 +16,7 @@ gray coil antenna.
 from __future__ import annotations
 
 import math
+import os
 import random
 from dataclasses import dataclass
 from pathlib import Path
@@ -74,6 +75,86 @@ NOTE_COLORS = [
 ]
 
 
+# --------------------------------------------------------------------------
+# Font discovery — real TTF files render Cyrillic much cleaner than synthetic
+# pygame.bold on random fallbacks.
+# --------------------------------------------------------------------------
+
+def _windows_fonts_dir() -> Path:
+    return Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+
+
+def _resolve_font_file(*filenames: str) -> Optional[str]:
+    folder = _windows_fonts_dir()
+    for name in filenames:
+        # Fonts folder is case-insensitive on Windows; try exact then lower.
+        for variant in (name, name.lower()):
+            path = folder / variant
+            if path.is_file():
+                return str(path)
+    return None
+
+
+def ui_font_regular_path() -> Optional[str]:
+    return _resolve_font_file(
+        "segoeui.ttf", "SegoeUI.ttf", "calibri.ttf", "Candara.ttf",
+    )
+
+
+def ui_font_semibold_path() -> Optional[str]:
+    return _resolve_font_file(
+        "seguisb.ttf", "SegoeUISemibold.ttf", "segoeuiz.ttf",
+        "segoeuib.ttf", "SegoeUIBold.ttf",
+    )
+
+
+def ui_font_bold_path() -> Optional[str]:
+    return _resolve_font_file(
+        "segoeuib.ttf", "SegoeUIBold.ttf", "seguisb.ttf",
+    )
+
+
+def match_font_fallback() -> Optional[str]:
+    try:
+        return pygame.font.match_font(
+            "segoe ui,segoeui,calibri,candara,trebuchet ms,arial"
+        )
+    except Exception:
+        return None
+
+
+def make_main_menu_hint_fonts(screen_w: int, screen_h: int
+                               ) -> tuple[pygame.font.Font, pygame.font.Font]:
+    """Smaller, tight headline + body for the lines under the logo."""
+    fb = match_font_fallback()
+    head_path = ui_font_semibold_path() or ui_font_bold_path() \
+        or ui_font_regular_path() or fb
+    sub_path = ui_font_regular_path() or fb
+    # Compact sizes; respect vertical space on short windows.
+    head_px = max(15, min(20, min(screen_w // 56, screen_h // 42)))
+    sub_px = max(12, min(16, min(screen_w // 72, screen_h // 52)))
+    head = pygame.font.Font(head_path, head_px)
+    head.set_bold(False)
+    sub = pygame.font.Font(sub_path, sub_px)
+    sub.set_bold(False)
+    return head, sub
+
+
+def draw_crisp_label(surface: pygame.Surface, font: pygame.font.Font,
+                     text: str, color: tuple[int, int, int],
+                     pos: tuple[int, int], anchor: str = "midtop") -> pygame.Rect:
+    """Text with a thin dark outline so it stays readable on the starfield."""
+    main = font.render(text, True, color)
+    rect = main.get_rect(**{anchor: pos})
+    outline_rgb = (10, 12, 26)
+    for ox, oy in ((-1, 0), (1, 0), (0, -1), (0, 1),
+                   (-1, -1), (1, -1), (-1, 1), (1, 1)):
+        edge = font.render(text, True, outline_rgb)
+        surface.blit(edge, rect.move(ox, oy))
+    surface.blit(main, rect)
+    return rect
+
+
 @dataclass
 class Theme:
     title_font: pygame.font.Font
@@ -84,26 +165,28 @@ class Theme:
 
     @classmethod
     def make(cls) -> "Theme":
-        # Prefer a chunky modern sans (Nunito / Poppins) — fall back to whatever's around.
+        fb = match_font_fallback()
+        reg = ui_font_regular_path()
+        bold = ui_font_bold_path()
+        semi = ui_font_semibold_path()
+        title_path = bold or semi or reg or fb
+        body_path = reg or fb
+        huge_path = bold or semi or title_path
+
+        title = pygame.font.Font(title_path, 34)
+        title.set_bold(False)
+        huge = pygame.font.Font(huge_path, 122)
+        huge.set_bold(False)
+        body = pygame.font.Font(body_path, 21)
+        body.set_bold(False)
+        small = pygame.font.Font(body_path, 15)
         try:
-            display_name = pygame.font.match_font(
-                "segoe ui,segoeui,malgun gothic,nunitoblack,nunito,"
-                "poppins,montserrat,segoeuiblack,arialunicode ms,arial"
+            mono_name = pygame.font.match_font(
+                "jetbrainsmono,consolas,couriernew,monospace"
             )
         except Exception:
-            display_name = None
-        try:
-            mono_name = pygame.font.match_font("jetbrainsmono,consolas,couriernew,monospace")
-        except Exception:
             mono_name = None
-        # Bold-ish weights; pygame's `bold=True` thickens any TTF.
-        title = pygame.font.Font(display_name, 38)
-        title.set_bold(True)
-        huge = pygame.font.Font(display_name, 130)
-        huge.set_bold(True)
-        body = pygame.font.Font(display_name, 22)
-        small = pygame.font.Font(display_name, 16)
-        mono = pygame.font.Font(mono_name, 16)
+        mono = pygame.font.Font(mono_name, 15)
         return cls(title_font=title, body_font=body, small_font=small,
                    huge_font=huge, mono_font=mono)
 
