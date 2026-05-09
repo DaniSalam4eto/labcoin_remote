@@ -75,9 +75,11 @@ NOTE_COLORS = [
 
 
 # --------------------------------------------------------------------------
-# Font discovery — bundled rounded “cartoon” face first (Comfortaa), then
-# playful system fonts (Comic Sans on Windows), then generic UI fallbacks.
-# Real TTF files render Cyrillic cleaner than faux-bold on random fallbacks.
+# Font discovery — two stacks:
+#   * Neutral UI (Segoe UI / Calibri family): used for English; reads clean on
+#     the starfield instead of a rounded “doodle” face.
+#   * Rounded game face (bundled Comfortaa, Comic fallbacks): used for
+#     Bulgarian so Cyrillic stays on a deliberate display cut.
 # --------------------------------------------------------------------------
 
 _DOODLE_DIR = Path(__file__).resolve().parent
@@ -156,13 +158,54 @@ def match_font_fallback() -> Optional[str]:
         return None
 
 
-def make_main_menu_hint_fonts(screen_w: int, screen_h: int
-                               ) -> tuple[pygame.font.Font, pygame.font.Font]:
+def match_ui_font_fallback() -> Optional[str]:
+    """Sans-serif UI stack for Latin text — no rounded comic/game faces."""
+    try:
+        return pygame.font.match_font(
+            "segoe ui semibold,segoe ui,nunito sans semibold,nunito sans,"
+            "source sans 3,open sans,roboto,calibri,candara,trebuchet ms,"
+            "liberation sans,arial,helvetica,ubuntu,noto sans"
+        )
+    except Exception:
+        return None
+
+
+def title_font_file(*, rounded_display: bool) -> Optional[str]:
+    """Heavy headline / huge glyph face — Comfortaa stack vs neutral UI."""
+    if rounded_display:
+        return (cartoon_font_heavy_path()
+                or ui_font_bold_path() or ui_font_semibold_path()
+                or ui_font_regular_path() or match_font_fallback())
+    return (ui_font_bold_path() or ui_font_semibold_path()
+            or ui_font_regular_path() or match_ui_font_fallback())
+
+
+def body_font_file(*, rounded_display: bool) -> Optional[str]:
+    """Body / small text face paired with ``title_font_file``."""
+    if rounded_display:
+        return (cartoon_font_regular_path() or ui_font_regular_path()
+                or match_font_fallback())
+    return (ui_font_regular_path() or ui_font_semibold_path()
+            or match_ui_font_fallback())
+
+
+def make_main_menu_hint_fonts(
+    screen_w: int,
+    screen_h: int,
+    *,
+    rounded_display: bool = False,
+) -> tuple[pygame.font.Font, pygame.font.Font]:
     """Smaller, tight headline + body for the lines under the logo."""
-    fb = match_font_fallback()
-    head_path = (cartoon_font_heavy_path()
-                 or ui_font_semibold_path() or ui_font_bold_path() or fb)
-    sub_path = cartoon_font_regular_path() or ui_font_regular_path() or fb
+    if rounded_display:
+        fb = match_font_fallback()
+        head_path = (cartoon_font_heavy_path()
+                     or ui_font_semibold_path() or ui_font_bold_path() or fb)
+        sub_path = cartoon_font_regular_path() or ui_font_regular_path() or fb
+    else:
+        fb = match_ui_font_fallback()
+        head_path = (ui_font_semibold_path() or ui_font_bold_path()
+                     or ui_font_regular_path() or fb)
+        sub_path = ui_font_regular_path() or ui_font_semibold_path() or fb
     # Compact sizes; respect vertical space on short windows.
     head_px = max(15, min(20, min(screen_w // 56, screen_h // 42)))
     sub_px = max(12, min(16, min(screen_w // 72, screen_h // 52)))
@@ -197,12 +240,9 @@ class Theme:
     mono_font:  pygame.font.Font
 
     @classmethod
-    def make(cls) -> "Theme":
-        heavy_path = (cartoon_font_heavy_path()
-                      or ui_font_bold_path() or ui_font_semibold_path()
-                      or ui_font_regular_path() or match_font_fallback())
-        body_path = (cartoon_font_regular_path() or ui_font_regular_path()
-                     or match_font_fallback())
+    def make(cls, *, rounded_display: bool = False) -> "Theme":
+        heavy_path = title_font_file(rounded_display=rounded_display)
+        body_path = body_font_file(rounded_display=rounded_display)
 
         def _font(path: Optional[str], px: int) -> pygame.font.Font:
             f = pygame.font.Font(path, px) if path else pygame.font.Font(None, px)

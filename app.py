@@ -28,10 +28,11 @@ from doodle import (
     ACCENT_BLUE, ACCENT_CYAN, ACCENT_GREEN, ACCENT_PINK,
     ACCENT_RED, ACCENT_YELLOW, INK, INK_DIM, INK_SOFT,
     NoteFountain, PANEL_HI, PURPLE, Theme,
-    build_note_palette, cartoon_font_heavy_path, draw_background, draw_chunky_button,
+    build_note_palette, draw_background, draw_chunky_button,
     draw_crisp_label, draw_doodle_text,
     draw_remote_placeholder,
     load_image_alpha, make_main_menu_hint_fonts, scale_menu_logo,
+    title_font_file,
 )
 from esp32_connector import Esp32Connector, Event, NUMPAD_BUTTONS
 import strings_bg
@@ -155,7 +156,7 @@ class App:
         pygame.display.set_caption(self.L.WINDOW_TITLE)
         self.screen = pygame.display.set_mode(WINDOW_SIZE, _WINDOW_FLAGS)
         self.clock = pygame.time.Clock()
-        self.theme = Theme.make()
+        self.theme = Theme.make(rounded_display=self.L is strings_bg)
         self.state = AppState(status_text=self.L.STATUS_DEFAULT)
         self.connector = Esp32Connector()
 
@@ -214,6 +215,7 @@ class App:
     def _toggle_locale(self) -> None:
         self.L = strings_bg if self.L is strings_en else strings_en
         pygame.display.set_caption(self.L.WINDOW_TITLE)
+        self.theme = Theme.make(rounded_display=self.L is strings_bg)
         self.state.lang_check_armed_until = 0.0
 
     def _keyboard_lang_hold_active(self) -> bool:
@@ -790,7 +792,8 @@ class App:
         else:
             hints_top = logo_cy + 48
 
-        hint_head, hint_sub = make_main_menu_hint_fonts(w, h)
+        hint_head, hint_sub = make_main_menu_hint_fonts(
+            w, h, rounded_display=self.L is strings_bg)
         cx = w // 2
         r1 = draw_crisp_label(self.screen, hint_head, self.L.MAIN_MENU_LINE1,
                                INK, (cx, hints_top), anchor="midtop")
@@ -799,10 +802,9 @@ class App:
 
     def _draw_round_select(self, t: float) -> None:
         w, h = self.screen.get_size()
+        rd = self.L is strings_bg
         head_size = max(56, min(96, w // 14))
-        face_heavy = (cartoon_font_heavy_path()
-                      or pygame.font.match_font(
-                          "comfortaa,nunito semibold,comic sans ms,segoe ui,arial"))
+        face_heavy = title_font_file(rounded_display=rd)
         head_font = pygame.font.Font(face_heavy, head_size) if face_heavy else pygame.font.Font(None, head_size)
         head_font.set_bold(False)
         draw_doodle_text(self.screen,
@@ -834,9 +836,7 @@ class App:
         accents = [ACCENT_PINK, ACCENT_CYAN, ACCENT_YELLOW, ACCENT_GREEN, PURPLE,
                    ACCENT_BLUE, (255, 159, 67), ACCENT_RED,
                    ACCENT_PINK, ACCENT_CYAN]
-        digit_face = (cartoon_font_heavy_path()
-                      or pygame.font.match_font(
-                          "comfortaa,nunito semibold,comic sans ms,segoe ui,arial"))
+        digit_face = title_font_file(rounded_display=rd)
         digit_font = pygame.font.Font(digit_face, max(28, cell // 2)) if digit_face else pygame.font.Font(
             None, max(28, cell // 2))
         digit_font.set_bold(False)
