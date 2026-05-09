@@ -10,7 +10,7 @@ WINDOW_TITLE = "Labcoin — music remote"
 STATUS_DEFAULT = "Press START to look for the remote."
 STATUS_SEARCHING_BLE = "Searching for the remote over BLE..."
 STATUS_RETRYING = "Trying again..."
-STATUS_BUTTON_CHECK = "Press the highlighted button on the remote."
+STATUS_BUTTON_CHECK = "Press any remote button once per highlighted tile."
 STATUS_MAIN_MENU = "Press the number of players on the remote."
 STATUS_ROUNDS = "How many rounds? Press a number."
 
@@ -43,7 +43,7 @@ OOR_BODY = "Move it closer — retrying every 15 seconds."
 
 CONNECTED_TITLE = "Remote connected!"
 CONNECTED_HINT = (
-    "Press Space or click CONTINUE to test the buttons."
+    "Press almost any remote button, Space, or click CONTINUE to test the buttons."
 )
 
 BUTTON_CHECK_TITLE = "Button check"
@@ -51,7 +51,7 @@ BUTTON_CHECK_DONE = "All set — continue when you are ready."
 BUTTON_CHECK_KEYS = (
     "Press any remote button, Enter / Space, or tap CONTINUE."
 )
-BUTTON_CHECK_PRESS = "Press: {label}"
+BUTTON_CHECK_PRESS = "Next: {label} — any remote button advances."
 
 MAIN_MENU_FALLBACK = "LABCOIN MUSIC"
 MAIN_MENU_LINE1 = "PRESS THE NUMBER OF PLAYERS"

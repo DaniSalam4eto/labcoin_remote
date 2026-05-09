@@ -335,20 +335,53 @@ class App:
         else:
             st.last_button_label = ev.text
         st.last_button_at = time.monotonic()
+
+        # Same as Space / clicking the main chunky button — remote-only path.
+        if self._remote_activate_primary(ev):
+            return
+
         if st.screen == Screen.BUTTON_CHECK:
-            if ev.button is not None and self._button_check_can_continue():
+            if ev.button is None:
+                return
+            if self._button_check_can_continue():
                 self._finish_button_check()
                 return
-            if ev.button is not None:
+            if st.button_check_idx < len(BUTTON_CHECK_SEQUENCE):
+                expected = BUTTON_CHECK_SEQUENCE[st.button_check_idx]
+                st.button_check_done[expected] = True
                 st.button_check_done[ev.button] = True
-                if st.button_check_idx < len(BUTTON_CHECK_SEQUENCE):
-                    expected = BUTTON_CHECK_SEQUENCE[st.button_check_idx]
-                    if ev.button == expected:
-                        st.button_check_idx += 1
-        elif st.screen == Screen.MAIN_MENU and ev.digit is not None:
+                st.button_check_idx += 1
+            return
+
+        if st.screen == Screen.MAIN_MENU and ev.digit is not None:
             self._pick_player_count(ev.digit)
         elif st.screen == Screen.ROUND_SELECT and ev.digit is not None:
             self._pick_round_count(ev.digit)
+
+    def _remote_activate_primary(self, ev: Event) -> bool:
+        """Handle screens whose main control is Start / Reload / Continue.
+
+        Any remote key counts except the language-chord arming key (checkmark),
+        so chord stays: checkmark then numpad 1 within the window.
+        """
+        if ev.button is None:
+            return False
+        st = self.state
+        if (
+            self._lang_toggle_allowed_screen()
+            and ev.button == LANG_TOGGLE_CHECK_BTN
+        ):
+            return False
+        if st.screen == Screen.SETUP:
+            self._start_connection()
+            return True
+        if st.screen in (Screen.BAND_5GHZ, Screen.OUT_OF_RANGE):
+            self._reload()
+            return True
+        if st.screen == Screen.CONNECTED_OK:
+            self._begin_button_check()
+            return True
+        return False
 
     def _finish_button_check(self) -> None:
         self.go_fullscreen()
