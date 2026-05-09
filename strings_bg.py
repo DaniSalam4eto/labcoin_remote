@@ -50,7 +50,8 @@ CONNECTED_HINT = (
 BUTTON_CHECK_TITLE = "Проверка на бутоните"
 BUTTON_CHECK_DONE = "Готово — продължете, когато сте готови."
 BUTTON_CHECK_KEYS = (
-    "Натиснете Enter / интервал или докоснете НАПРЕД."
+    "Натиснете произволен бутон на дистанционното, Enter / интервал "
+    "или докоснете НАПРЕД."
 )
 BUTTON_CHECK_PRESS = "Натиснете: {label}"
 
@@ -73,6 +74,22 @@ TILE_OK = "ОК"
 COUNTDOWN_GO = "ТРЪГНИ!"
 
 FB_FALLBACK_BUTTON = "Бутон {n}"
+
+# Same indices as esp32_connector; Bulgarian labels for the GUI.
+BUTTON_NAMES = {
+    1: "Отметка",
+    2: "Двойна отметка",
+    3: "Нумпад 10",
+    4: "Нумпад 9",
+    5: "Нумпад 6",
+    6: "Нумпад 3",
+    7: "Нумпад 2",
+    8: "Нумпад 5",
+    9: "Нумпад 1",
+    10: "Нумпад 4",
+    11: "Нумпад 7",
+    12: "Нумпад 8",
+}
 
 
 def players_phrase(n: int) -> str:

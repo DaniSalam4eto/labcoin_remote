@@ -336,6 +336,9 @@ class App:
             st.last_button_label = ev.text
         st.last_button_at = time.monotonic()
         if st.screen == Screen.BUTTON_CHECK:
+            if ev.button is not None and self._button_check_can_continue():
+                self._finish_button_check()
+                return
             if ev.button is not None:
                 st.button_check_done[ev.button] = True
                 if st.button_check_idx < len(BUTTON_CHECK_SEQUENCE):
@@ -422,6 +425,9 @@ class App:
             elif st.screen == Screen.ROUND_SELECT:
                 self._pick_round_count(digit)
             elif st.screen == Screen.BUTTON_CHECK:
+                if self._button_check_can_continue():
+                    self._finish_button_check()
+                    return
                 # Allow keyboard to step through during testing without remote.
                 if st.button_check_idx >= len(BUTTON_CHECK_SEQUENCE):
                     return
