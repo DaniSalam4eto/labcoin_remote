@@ -27,9 +27,9 @@ import doodle
 from doodle import (
     ACCENT_BLUE, ACCENT_CYAN, ACCENT_GREEN, ACCENT_PINK,
     ACCENT_RED, ACCENT_YELLOW, INK, INK_DIM, INK_SOFT,
-    NoteFountain, PANEL_FILL, PANEL_HI, PURPLE, Theme,
+    NoteFountain, PANEL_HI, PURPLE, Theme,
     build_note_palette, cartoon_font_heavy_path, draw_background, draw_chunky_button,
-    draw_crisp_label, draw_doodle_panel, draw_doodle_text,
+    draw_crisp_label, draw_doodle_text,
     draw_remote_placeholder,
     load_image_alpha, make_main_menu_hint_fonts, scale_menu_logo,
 )
@@ -522,8 +522,6 @@ class App:
     def _draw_setup(self, t: float) -> None:
         cx, cy = self._center()
         panel = self._panel_rect(620, 420, dy=-20)
-        draw_doodle_panel(self.screen, panel, fill=PANEL_FILL,
-                           outline=PURPLE, radius=28)
         # Wordmark above the headline.
         draw_doodle_text(self.screen, self.L.TITLE_WORDMARK,
                           self.theme.body_font, ACCENT_CYAN,
@@ -555,8 +553,6 @@ class App:
     def _draw_loading(self, t: float) -> None:
         cx, cy = self._center()
         panel = self._panel_rect(560, 320, dy=-10)
-        draw_doodle_panel(self.screen, panel, fill=PANEL_FILL,
-                           outline=PURPLE, radius=28)
         draw_doodle_text(self.screen, self.L.LOADING_TITLE,
                           self.theme.title_font, INK,
                           (panel.centerx, panel.top + 72), anchor="center")
@@ -576,8 +572,6 @@ class App:
     def _draw_warning_screen(self, title: str, lines: list[str], t: float,
                               accent: tuple[int, int, int]) -> None:
         panel = self._panel_rect(660, 380, dy=-20)
-        draw_doodle_panel(self.screen, panel, fill=PANEL_FILL,
-                           outline=accent, radius=28)
         draw_doodle_text(self.screen, title, self.theme.title_font, accent,
                           (panel.centerx, panel.top + 64), anchor="center")
         ul = pygame.Rect(0, 0, 90, 5)
@@ -611,8 +605,6 @@ class App:
     def _draw_out_of_range(self, t: float) -> None:
         cx, cy = self._center()
         panel = self._panel_rect(660, 540, dy=-10)
-        draw_doodle_panel(self.screen, panel, fill=PANEL_FILL,
-                           outline=ACCENT_PINK, radius=28)
         draw_doodle_text(self.screen, self.L.OOR_TITLE,
                           self.theme.title_font, ACCENT_PINK,
                           (panel.centerx, panel.top + 50), anchor="center")
@@ -639,8 +631,6 @@ class App:
     def _draw_connected_ok(self, t: float) -> None:
         cx, cy = self._center()
         panel = self._panel_rect(660, 560, dy=-20)
-        draw_doodle_panel(self.screen, panel, fill=PANEL_FILL,
-                           outline=ACCENT_GREEN, radius=28)
         draw_doodle_text(self.screen, self.L.CONNECTED_TITLE,
                           self.theme.title_font, ACCENT_GREEN,
                           (panel.centerx, panel.top + 50), anchor="center")
@@ -670,8 +660,6 @@ class App:
         can_continue = self._button_check_can_continue()
         # Shorter card + slight lift so the grid clears the bottom status line.
         panel = self._panel_rect(min(w - 96, 780), min(h - 132, 528), dy=-12)
-        draw_doodle_panel(self.screen, panel, fill=PANEL_FILL,
-                           outline=PURPLE, radius=28)
         draw_doodle_text(self.screen, self.L.BUTTON_CHECK_TITLE,
                           self.theme.title_font, INK,
                           (panel.centerx, panel.top + 50), anchor="center")

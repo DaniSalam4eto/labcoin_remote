@@ -8,9 +8,8 @@ exposed to ``app.py`` are:
   * `NoteFountain`        -- floating colored music notes that decorate the
                               left and right edges of every screen.
 
-Plus a handful of free functions that draw frosted-glass panels, chunky
-3D-feeling buttons, crisp text, and the purple trapezoid remote with its
-gray coil antenna.
+Plus a handful of free functions that draw chunky 3D-feeling buttons,
+crisp text, and the purple trapezoid remote with its gray coil antenna.
 """
 
 from __future__ import annotations
@@ -441,80 +440,6 @@ def _shade(color: tuple[int, int, int], factor: float) -> tuple[int, int, int]:
         max(0, min(255, int(color[1] * factor))),
         max(0, min(255, int(color[2] * factor))),
     )
-
-
-def draw_doodle_panel(surface: pygame.Surface, rect: pygame.Rect,
-                      fill: tuple[int, int, int] = PANEL_FILL,
-                      outline: Optional[tuple[int, int, int]] = PANEL_OUTLINE,
-                      radius: int = 24, seed: int = 0) -> None:
-    """Frosted glass card over the starfield — translucent fill, soft shadow,
-    thin rim. Used by every modal-style screen so the background stays visible.
-
-    ``seed`` is unused (kept for call-site compatibility).
-    """
-    del seed
-    pad = 18
-    lw = rect.width + pad * 2
-    lh = rect.height + pad * 2
-    layer = pygame.Surface((lw, lh), pygame.SRCALPHA)
-    inner = pygame.Rect(pad, pad, rect.width, rect.height)
-
-    # Compact shadow (no huge drop slab).
-    pygame.draw.rect(
-        layer,
-        (0, 0, 0, 62),
-        inner.move(1, 5),
-        border_radius=radius + 1,
-    )
-
-    # Translucent tint — stars still read through.
-    ga = 112
-    pygame.draw.rect(
-        layer,
-        (fill[0], fill[1], fill[2], ga),
-        inner,
-        border_radius=radius,
-    )
-
-    # Very soft top sheen.
-    sheen_h = max(3, radius // 2)
-    sheen_w = max(1, inner.width - 14)
-    sheen = pygame.Surface((sheen_w, sheen_h), pygame.SRCALPHA)
-    pygame.draw.rect(
-        sheen,
-        (255, 255, 255, 24),
-        sheen.get_rect(),
-        border_radius=max(2, sheen_h // 2),
-    )
-    layer.blit(sheen, (pad + 7, pad + 4))
-
-    # Hairline rim — accent colour from callers (purple / pink / green).
-    if outline is not None:
-        if outline == PANEL_OUTLINE:
-            rim = (255, 255, 255, 46)
-        else:
-            rim = (outline[0], outline[1], outline[2], 118)
-        pygame.draw.rect(layer, rim, inner, width=1, border_radius=radius)
-        if outline != PANEL_OUTLINE and inner.width > 120:
-            pygame.draw.rect(
-                layer,
-                (255, 255, 255, 20),
-                inner.inflate(-3, -3),
-                width=1,
-                border_radius=max(4, radius - 3),
-            )
-
-    else:
-        pygame.draw.rect(
-            layer,
-            (255, 255, 255, 42),
-            inner,
-            width=1,
-            border_radius=radius,
-        )
-
-    dst = (rect.left - pad, rect.top - pad)
-    surface.blit(layer, dst)
 
 
 def draw_chunky_button(surface: pygame.Surface, rect: pygame.Rect, label: str,
