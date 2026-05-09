@@ -51,18 +51,18 @@ BUTTON_BY_GPIO = {g: i + 1 for i, g in enumerate(GPIO_BY_BUTTON)}
 # Labels when ESP sends BTN:<n>. Numpad keys are ordered by your physical layout:
 # 1st press (excluding checkmarks) → Numpad 1 … 10th → Numpad 10 (see remap note below).
 BUTTON_NAMES = {
-    1: "Checkmark",
-    2: "Double checkmark",
-    3: "Numpad 10",   # 10th in your row order
-    4: "Numpad 9",    # 9th
-    5: "Numpad 6",    # 6th
-    6: "Numpad 3",    # 3rd
-    7: "Numpad 2",    # 2nd
-    8: "Numpad 5",    # 5th
-    9: "Numpad 1",    # 1st
-    10: "Numpad 4",   # 4th
-    11: "Numpad 7",   # 7th
-    12: "Numpad 8",   # 8th
+    1: "Отметка",
+    2: "Двойна отметка",
+    3: "Нумпад 10",
+    4: "Нумпад 9",
+    5: "Нумпад 6",
+    6: "Нумпад 3",
+    7: "Нумпад 2",
+    8: "Нумпад 5",
+    9: "Нумпад 1",
+    10: "Нумпад 4",
+    11: "Нумпад 7",
+    12: "Нумпад 8",
 }
 
 
@@ -169,13 +169,13 @@ def button_name(num_text: str) -> tuple[int | None, str]:
     try:
         num = int(num_text)
     except ValueError:
-        return None, f"Button {num_text}"
-    return num, BUTTON_NAMES.get(num, f"Button {num}")
+        return None, f"Бутон {num_text}"
+    return num, BUTTON_NAMES.get(num, f"Бутон {num}")
 
 
 def send_button_name(sock: socket.socket, num_text: str) -> None:
     num, name = button_name(num_text)
-    display_name = sanitize(name) or (f"Button {num}" if num is not None else "Button")
+    display_name = sanitize(name) or (f"Бутон {num}" if num is not None else "Бутон")
     line = f"{display_name}|pressed\n".encode("utf-8")
     try:
         sock.sendall(line)

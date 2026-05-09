@@ -48,18 +48,18 @@ WIFI_NEG_TIMEOUT_S = 30.0
 # Button index -> friendly name. Same mapping as send_song.py so the OLED
 # echo screen stays consistent across both tools.
 BUTTON_NAMES = {
-    1: "Checkmark",
-    2: "Double checkmark",
-    3: "Numpad 10",
-    4: "Numpad 9",
-    5: "Numpad 6",
-    6: "Numpad 3",
-    7: "Numpad 2",
-    8: "Numpad 5",
-    9: "Numpad 1",
-    10: "Numpad 4",
-    11: "Numpad 7",
-    12: "Numpad 8",
+    1: "Отметка",
+    2: "Двойна отметка",
+    3: "Нумпад 10",
+    4: "Нумпад 9",
+    5: "Нумпад 6",
+    6: "Нумпад 3",
+    7: "Нумпад 2",
+    8: "Нумпад 5",
+    9: "Нумпад 1",
+    10: "Нумпад 4",
+    11: "Нумпад 7",
+    12: "Нумпад 8",
 }
 
 # Numpad-style buttons exposed to game logic. (button index -> digit 1..10).
@@ -338,11 +338,11 @@ class Esp32Connector:
         except ValueError:
             return
         digit = NUMPAD_BUTTONS.get(num)
-        self._emit("button", text=BUTTON_NAMES.get(num, f"Button {num}"),
+        self._emit("button", text=BUTTON_NAMES.get(num, f"Бутон {num}"),
                    button=num, digit=digit)
 
         # Echo a friendly name back to the OLED (matches send_song.py behavior).
-        name = BUTTON_NAMES.get(num, f"Button {num}")
+        name = BUTTON_NAMES.get(num, f"Бутон {num}")
         try:
             sock.sendall(f"{name}|pressed\n".encode("utf-8"))
         except OSError:
