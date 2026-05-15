@@ -1,0 +1,24 @@
+{
+  "id": "Travis_Scott_ft_Playboi_Carti_-_FE_N",
+  "artist": "Travis Scott ft. Playboi Carti",
+  "title": "FE!N",
+  "origin": "global",
+  "added_at": "2026-05-14T19:59:03Z",
+  "duration": 209.606531,
+  "youtube_id": "B9synWjqBn8",
+  "youtube_title": "Travis Scott - FE!N ft. Playboi Carti",
+  "youtube_url": "https://www.youtube.com/watch?v=B9synWjqBn8",
+  "chart_source": "manual-url",
+  "clip_positions": [
+    41.97798937308775,
+    75.98804720164918,
+    117.01441029946488,
+    165.87138003967218
+  ],
+  "clips": [
+    "clip_1.m4a",
+    "clip_2.m4a",
+    "clip_3.m4a",
+    "clip_4.m4a"
+  ]
+}

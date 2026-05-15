@@ -1,0 +1,24 @@
+{
+  "id": "Toni_Storaro_-_Naj-sladkata",
+  "artist": "Toni Storaro",
+  "title": "Naj-sladkata",
+  "origin": "bg",
+  "added_at": "2026-05-14T19:41:50Z",
+  "duration": 186.433016,
+  "youtube_id": "xRH8jkIAC3k",
+  "youtube_title": "Тони Стораро - Най сладката (Official Audio)",
+  "youtube_url": "https://www.youtube.com/watch?v=xRH8jkIAC3k",
+  "chart_source": "manual-url",
+  "clip_positions": [
+    16.719272053423932,
+    76.92261727495156,
+    99.0160964496218,
+    141.22997451083012
+  ],
+  "clips": [
+    "clip_1.m4a",
+    "clip_2.m4a",
+    "clip_3.m4a",
+    "clip_4.m4a"
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "id": "DIMOFF_-_MAZNA",
+  "artist": "DIMOFF",
+  "title": "MAZNA",
+  "origin": "global",
+  "added_at": "2026-05-14T19:55:10Z",
+  "duration": 121.927982,
+  "youtube_id": "AAYHl3AIZkc",
+  "youtube_title": "DIMOFF - MAZNA [OFFICIAL 2023 VIDEO]",
+  "youtube_url": "https://www.youtube.com/watch?v=AAYHl3AIZkc",
+  "chart_source": "manual-url",
+  "clip_positions": [
+    15.796528164431656,
+    41.62675429928122,
+    67.97283981456896,
+    90.3537053328802
+  ],
+  "clips": [
+    "clip_1.m4a",
+    "clip_2.m4a",
+    "clip_3.m4a",
+    "clip_4.m4a"
+  ]
+}

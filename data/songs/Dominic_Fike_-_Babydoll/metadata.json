@@ -1,0 +1,24 @@
+{
+  "id": "Dominic_Fike_-_Babydoll",
+  "artist": "Dominic Fike",
+  "title": "Babydoll",
+  "origin": "global",
+  "added_at": "2026-05-14T19:59:53Z",
+  "duration": 98.127528,
+  "youtube_id": "pTmwTQrY3Ts",
+  "youtube_title": "Dominic Fike - Babydoll (Lyrics)",
+  "youtube_url": "https://www.youtube.com/watch?v=pTmwTQrY3Ts",
+  "chart_source": "manual-url",
+  "clip_positions": [
+    16.107365521784978,
+    32.8531560614388,
+    49.739371575573294,
+    66.17194967155645
+  ],
+  "clips": [
+    "clip_1.m4a",
+    "clip_2.m4a",
+    "clip_3.m4a",
+    "clip_4.m4a"
+  ]
+}

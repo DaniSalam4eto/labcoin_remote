@@ -2,3 +2,6 @@ pygame>=2.5,<3
 bleak>=0.22,<1
 pillow>=10
 pillow-avif-plugin>=1.4
+
+yt-dlp>=2024.8
+flask>=3.0

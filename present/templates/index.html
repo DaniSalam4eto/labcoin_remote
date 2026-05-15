@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PRESENT — Song clip library</title>
+  <style>
+    :root {
+      --bg: #f6efe2;
+      --panel: #fbf6ea;
+      --ink: #2b2b2b;
+      --muted: #79716a;
+      --accent: #d96d3b;
+      --accent-soft: #ffd8c3;
+      --bg-bg: #b8d8c5;
+      --bg-global: #c9d5ec;
+      --line: #e2d9c4;
+      --shadow: 0 1px 0 rgba(0,0,0,.04), 0 8px 24px rgba(0,0,0,.06);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+    }
+    header {
+      padding: 28px 32px 14px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+    header h1 {
+      margin: 0;
+      font-size: 26px;
+      letter-spacing: .2px;
+    }
+    header .meta {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 4px;
+    }
+    header .meta strong { color: var(--ink); font-weight: 600; }
+    main {
+      padding: 24px 32px 64px;
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+    section + section { margin-top: 28px; }
+    h2 {
+      margin: 4px 0 12px;
+      font-size: 18px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    h2 .count {
+      color: var(--muted);
+      font-weight: 400;
+      font-size: 14px;
+    }
+    .grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px 16px;
+      box-shadow: var(--shadow);
+    }
+    .card .title {
+      font-weight: 600;
+      margin-bottom: 2px;
+      word-break: break-word;
+    }
+    .card .artist {
+      color: var(--muted);
+      font-size: 14px;
+      margin-bottom: 10px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      letter-spacing: .4px;
+      text-transform: uppercase;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+    .badge.bg { background: var(--bg-bg); color: #1f4734; }
+    .badge.global { background: var(--bg-global); color: #1f3a6b; }
+    .clips {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+    }
+    .clip {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 6px 8px;
+    }
+    .clip label {
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: .4px;
+      text-transform: uppercase;
+    }
+    .clip audio {
+      width: 100%;
+      margin-top: 4px;
+      height: 32px;
+    }
+    .empty {
+      padding: 40px;
+      text-align: center;
+      color: var(--muted);
+      border: 1px dashed var(--line);
+      border-radius: 12px;
+      background: var(--panel);
+    }
+    .empty code {
+      background: #fff;
+      border: 1px solid var(--line);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+    footer {
+      margin: 48px auto 0;
+      max-width: 1100px;
+      padding: 0 32px 32px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 600;
+      font-size: 12px;
+    }
+    header .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    header .topbar a.admin {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 13px;
+      border: 1px solid var(--line);
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: #fff;
+    }
+    header .topbar a.admin:hover { color: var(--accent); border-color: var(--accent); }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="topbar">
+      <div>
+        <h1>PRESENT <span class="pill">song clips</span></h1>
+        <div class="meta">
+          <strong>{{ total }}</strong> songs &middot;
+          {% if updated_at %}updated {{ updated_at }}{% else %}not built yet{% endif %}
+          {% if auth_required %}&middot; mutations require <code>X-Auth-Token</code>{% endif %}
+        </div>
+      </div>
+      <a class="admin" href="{{ url_for('admin_page') }}">Admin →</a>
+    </div>
+  </header>
+
+  <main>
+    {% if message %}
+      <div class="empty">{{ message }}</div>
+    {% elif total == 0 %}
+      <div class="empty">
+        Library is empty. Build it from the CLI:
+        <div style="margin-top:10px">
+          <code>python -m present init</code>
+        </div>
+      </div>
+    {% else %}
+      <section>
+        <h2>Bulgarian <span class="count">{{ bg_songs|length }} songs</span></h2>
+        {% if bg_songs %}
+          <div class="grid">
+            {% for s in bg_songs %}{% include "_song_card.html" %}{% endfor %}
+          </div>
+        {% else %}
+          <div class="empty">No Bulgarian songs yet.</div>
+        {% endif %}
+      </section>
+
+      <section>
+        <h2>Global <span class="count">{{ global_songs|length }} songs</span></h2>
+        {% if global_songs %}
+          <div class="grid">
+            {% for s in global_songs %}{% include "_song_card.html" %}{% endfor %}
+          </div>
+        {% else %}
+          <div class="empty">No global songs yet.</div>
+        {% endif %}
+      </section>
+    {% endif %}
+  </main>
+
+  <footer>
+    PRESENT — top-200 song clip builder. Source charts: bgtop40.com, Billboard Hot 100, plus a local seed list.
+  </footer>
+</body>
+</html>

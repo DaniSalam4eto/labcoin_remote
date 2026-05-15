@@ -88,6 +88,22 @@ class Event:
     digit: Optional[int] = None  # populated for button events that map to a numpad digit
 
 
+def _sanitize_field(value: str) -> str:
+    """Strip the protocol's reserved characters from a user-supplied field.
+
+    ``|`` separates fields and ``\\n`` terminates a message in the
+    ESP32's wire format, so both are replaced.
+    """
+
+    return (
+        str(value or "")
+        .replace("|", "/")
+        .replace("\r", " ")
+        .replace("\n", " ")
+        .strip()
+    )
+
+
 def _run(args: list[str]) -> str:
     try:
         proc = subprocess.run(args, capture_output=True, text=True, check=False, timeout=8)
@@ -202,6 +218,33 @@ class Esp32Connector:
 
     def request_immediate_reconnect(self) -> None:
         self._reconnect_now.set()
+
+    def send_song(self, artist: str, title: str) -> bool:
+        """Push ``"artist|title\\n"`` to the OLED. No-op when offline.
+
+        Matches the protocol implemented in ``send_song.py`` and the ESP32
+        firmware: the remote reads two fields separated by ``|`` and a
+        trailing newline, then prints them on its OLED. Returns ``True``
+        on a successful write.
+        """
+
+        artist_clean = _sanitize_field(artist) or "—"
+        title_clean = _sanitize_field(title) or "—"
+        line = f"{artist_clean}|{title_clean}\n".encode("utf-8")
+        with self._tcp_lock:
+            sock = self._tcp_sock
+        if sock is None:
+            return False
+        try:
+            sock.sendall(line)
+            return True
+        except OSError:
+            return False
+
+    def send_leaderboard(self, line1: str, line2: str) -> bool:
+        """Push two short lines to the OLED (same ``line1|line2`` protocol as songs)."""
+
+        return self.send_song(line1, line2)
 
     def poll_events(self) -> list[Event]:
         out: list[Event] = []

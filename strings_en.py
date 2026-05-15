@@ -63,9 +63,37 @@ ROUND_TITLE = "How many rounds?"
 ROUND_HINT = "Press a number on the remote (or keyboard)."
 
 PLAYING_TITLE = "Game on"
-PLAYING_STATUS = "The game has started — listen to the remote."
+PLAYING_STATUS = "Listen — the title is on the remote display."
 PLAYING_NOTE = (
-    "(Round logic comes next — this is the connected shell.)"
+    "Numpad = buzz (stops clip)   •   Check advances rounds & scoreboard   •   Hold both checks ~2 s = mis-buzz   •   Backspace = menu"
+)
+PLAYING_HINT_WAIT_REVEAL = (
+    "Clip 1 done — press Check on the remote for another clip from this song."
+)
+PLAYING_HINT_CLIP2 = "Second clip — names stay on the remote only."
+PLAYING_HINT_WAIT_CONFIRM = (
+    "Paused for a buzz-in. Check = 1 pt · Double check = 2 pts (then podium — Check again for next round). "
+    "Hold Check + Double check together ~2 s to cancel — music continues, no points."
+)
+PLAYING_HINT_WAIT_ADVANCE = (
+    "Press Check for this scoreboard — press Check again when the big bars finish "
+    "to start the next round."
+)
+PLAYING_HINT_GUESS = "While a clip plays: numpad 1–{n} buzzes in (stops playback — see status line)."
+PLAYING_BUZZ_LOCK = "Buzz-in: player {n}"
+PLAYING_ROUND = "Round {n} of {total}"
+PLAYING_NOW = "Now playing"
+PLAYING_NO_LIBRARY = (
+    "No songs found. Run `python -m present init` to build the library."
+)
+PLAYING_AUDIO_ERROR = "Audio engine unavailable — install ffmpeg and retry."
+PLAYING_REMOTE_OFFLINE = "Remote offline — clip is playing on this PC only."
+PLAYING_FINISHED = "All rounds played — press Check to return to the menu."
+
+LEADERBOARD_TITLE = "Leaderboard"
+LEADERBOARD_PLAYER = "Player {n}"
+PLAYING_LEADERBOARD_HINT = (
+    "Press Check or Enter for the next round (continues automatically after a few seconds)."
 )
 
 TILE_OK = "OK"

@@ -1,7 +1,7 @@
 # PRESENT — Top 200 Songs Clip Builder
 
 Maintains a local library of 200 well-known songs from the last 24 months
-(40% Bulgarian, 60% global mainstream) and produces four 5-second M4A clips
+(40% Bulgarian, 60% global mainstream) and produces four 15-second M4A clips
 per song from positions evenly spaced across the middle of the track
 (skipping the first and last 15 seconds).
 
@@ -45,15 +45,22 @@ python -m present refresh
 ## Run the web service
 
 ```bash
-python -m present serve --host 0.0.0.0 --port 8080
+python -m present serve --port 8090
 ```
 
-Open `http://<pi-ip>:8080`. Set `PRESENT_TOKEN=...` in the environment to
+By default the service binds to `0.0.0.0` (all network interfaces), so phones
+and other PCs on the **same LAN** can open `http://<this-machine-ip>:8090`.
+Use `--host 127.0.0.1` only when you want localhost-only. On Windows, allow the
+chosen TCP port through Windows Firewall if connections are refused from other
+devices.
+
+Set `PRESENT_TOKEN=...` in the environment to
 require an `X-Auth-Token` header on `POST` / `DELETE` operations.
 
 ### Cloudflare Tunnel
 
-Bind the tunnel to `localhost:8080`. The `GET /` library view is publicly
+Bind the tunnel to the port you pass to `serve` (for example
+`localhost:8090`). The `GET /` library view is publicly
 readable; mutations require the auth token (set `PRESENT_TOKEN` in `.env`).
 
 ## systemd (Raspberry Pi auto-start)

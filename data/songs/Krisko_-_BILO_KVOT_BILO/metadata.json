@@ -1,0 +1,24 @@
+{
+  "id": "Krisko_-_BILO_KVOT_BILO",
+  "artist": "Krisko",
+  "title": "BILO KVOT BILO",
+  "origin": "global",
+  "added_at": "2026-05-14T19:49:21Z",
+  "duration": 226.278458,
+  "youtube_id": "84m4hjF39A4",
+  "youtube_title": "KRISKO - BILO KVOT BILO [Official HD Video]",
+  "youtube_url": "https://www.youtube.com/watch?v=84m4hjF39A4",
+  "chart_source": "manual-url",
+  "clip_positions": [
+    48.71569117344267,
+    90.27519005269315,
+    115.09805971259816,
+    168.6350898789737
+  ],
+  "clips": [
+    "clip_1.m4a",
+    "clip_2.m4a",
+    "clip_3.m4a",
+    "clip_4.m4a"
+  ]
+}

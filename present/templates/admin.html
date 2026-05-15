@@ -1,0 +1,583 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PRESENT — Admin</title>
+  <style>
+    :root {
+      --bg: #f6efe2;
+      --panel: #fbf6ea;
+      --ink: #2b2b2b;
+      --muted: #79716a;
+      --accent: #d96d3b;
+      --accent-soft: #ffd8c3;
+      --bg-bg: #b8d8c5;
+      --bg-global: #c9d5ec;
+      --line: #e2d9c4;
+      --danger: #b14242;
+      --danger-soft: #f6d1d1;
+      --shadow: 0 1px 0 rgba(0,0,0,.04), 0 8px 24px rgba(0,0,0,.06);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+    }
+    header {
+      padding: 24px 32px 14px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    header h1 { margin: 0; font-size: 24px; }
+    header h1 .pill {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 600;
+      font-size: 12px;
+      margin-left: 8px;
+      vertical-align: middle;
+    }
+    header .meta { color: var(--muted); font-size: 13px; }
+    header .meta strong { color: var(--ink); font-weight: 600; }
+    .topnav { display: flex; gap: 10px; align-items: center; }
+    .topnav a, .topnav button {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 13px;
+      background: transparent;
+      border: 1px solid transparent;
+      padding: 6px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .topnav a:hover, .topnav button:hover { color: var(--accent); border-color: var(--line); }
+    main { padding: 24px 32px 64px; max-width: 1100px; margin: 0 auto; }
+    section { margin-bottom: 28px; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      padding: 18px 20px;
+    }
+    h2 {
+      margin: 0 0 12px;
+      font-size: 18px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    h2 .count { color: var(--muted); font-weight: 400; font-size: 14px; }
+    .form-grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }
+    .form-grid .full { grid-column: 1 / -1; }
+    label { display: block; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; margin-bottom: 6px; }
+    input[type=text], input[type=url] {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #fff;
+      font: inherit;
+    }
+    input:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+    .origin {
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      padding-top: 4px;
+    }
+    .origin label { display: inline-flex; align-items: center; gap: 6px; text-transform: none; letter-spacing: 0; color: var(--ink); font-size: 14px; margin: 0; }
+    .btn {
+      padding: 10px 18px;
+      border-radius: 999px;
+      border: 0;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    .btn:disabled { opacity: 0.6; cursor: progress; }
+    .btn.ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+    .btn.danger { background: var(--danger); }
+    .btn.danger:hover { filter: brightness(0.95); }
+    .hint { color: var(--muted); font-size: 13px; margin-top: 8px; }
+    .status {
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      display: none;
+      white-space: pre-wrap;
+    }
+    .status.show { display: block; }
+    .status.ok { background: #d8eed5; color: #2c5f1f; border: 1px solid #b6dfb0; }
+    .status.err { background: var(--danger-soft); color: #6b1f1f; border: 1px solid #e4a8a8; }
+    .status.running { background: #e8e2d4; color: #5a4a1f; border: 1px solid #d5ca9f; }
+
+    table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+    }
+    th, td {
+      text-align: left;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: middle;
+    }
+    th { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+    tr:last-child td { border-bottom: 0; }
+    tr:hover td { background: #fbf3df; }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      letter-spacing: .4px;
+      text-transform: uppercase;
+    }
+    .badge.bg { background: var(--bg-bg); color: #1f4734; }
+    .badge.global { background: var(--bg-global); color: #1f3a6b; }
+    .row-actions { text-align: right; white-space: nowrap; }
+    .empty {
+      padding: 32px;
+      text-align: center;
+      color: var(--muted);
+      border: 1px dashed var(--line);
+      border-radius: 12px;
+      background: #fff;
+    }
+    .search {
+      width: 100%;
+      max-width: 340px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+    .bulk-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .bulk-bar .sep { color: var(--line); user-select: none; }
+    .bulk-bar button.linkish {
+      background: transparent;
+      border: 0;
+      color: var(--accent);
+      cursor: pointer;
+      font: inherit;
+      text-decoration: underline;
+      padding: 0;
+    }
+    .bulk-bar button.linkish:hover { color: #b35528; }
+    .bulk-bar #bulkCount { font-weight: 600; color: var(--ink); }
+    th.checkbox-col, td.checkbox-col {
+      width: 40px;
+      text-align: center;
+      padding-left: 8px;
+      padding-right: 8px;
+    }
+    th.checkbox-col input, td.checkbox-col input {
+      width: 18px;
+      height: 18px;
+      cursor: pointer;
+      accent-color: var(--accent);
+    }
+    code { background: #fff; border: 1px solid var(--line); padding: 1px 6px; border-radius: 4px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>PRESENT <span class="pill">admin</span></h1>
+      <div class="meta">
+        <strong>{{ total }}</strong> songs
+        {% if updated_at %}&middot; updated {{ updated_at }}{% endif %}
+        {% if auth_required %}&middot; signed in{% endif %}
+      </div>
+    </div>
+    <div class="topnav">
+      <a href="{{ url_for('index') }}">← Library</a>
+      {% if auth_required %}
+        <form method="post" action="{{ url_for('admin_logout') }}" style="margin:0">
+          <button type="submit">Sign out</button>
+        </form>
+      {% endif %}
+    </div>
+  </header>
+
+  <main>
+    <section>
+      <div class="panel">
+        <h2>Add a song from a YouTube link</h2>
+        <form id="addForm" class="form-grid" autocomplete="off">
+          <div class="full">
+            <label for="f-url">YouTube URL</label>
+            <input id="f-url" type="url" name="url" placeholder="https://www.youtube.com/watch?v=…" required>
+          </div>
+          <div>
+            <label for="f-artist">Artist / writer</label>
+            <input id="f-artist" type="text" name="artist" placeholder="e.g. DARA" required>
+          </div>
+          <div>
+            <label for="f-title">Song title</label>
+            <input id="f-title" type="text" name="title" placeholder="e.g. Mi Amor" required>
+          </div>
+          <div>
+            <label>Origin</label>
+            <div class="origin">
+              <label><input type="radio" name="origin" value="bg"> Bulgarian</label>
+              <label><input type="radio" name="origin" value="global" checked> Global</label>
+            </div>
+          </div>
+          <div class="full" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <button class="btn" type="submit">Add &amp; clip</button>
+            <label style="text-transform:none;letter-spacing:0;color:var(--ink);font-size:13px;margin:0;display:inline-flex;gap:6px;align-items:center;">
+              <input type="checkbox" name="overwrite"> Overwrite if it already exists
+            </label>
+            <span class="hint">Four 15-second clips are picked at random positions across the middle of the track.</span>
+          </div>
+        </form>
+        <div id="addStatus" class="status"></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="panel">
+        <h2>Library <span class="count" id="libCount">{{ total }} songs</span></h2>
+        <div style="margin-bottom:12px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;">
+          <input id="filter" class="search" type="text" placeholder="Filter by artist or title…">
+        </div>
+        {% if songs %}
+        <div class="bulk-bar" id="bulkBar">
+          <span id="bulkCount">0 selected</span>
+          <span class="sep">|</span>
+          <button type="button" class="linkish" id="selectVisibleBtn">Select visible</button>
+          <button type="button" class="linkish" id="selectAllBtn">Select all</button>
+          <button type="button" class="linkish" id="clearSelectionBtn">Clear selection</button>
+          <span class="sep">|</span>
+          <button type="button" class="btn danger" id="bulkDeleteBtn" disabled>Delete selected</button>
+        </div>
+          <table id="songTable">
+            <thead>
+              <tr>
+                <th class="checkbox-col">
+                  <input type="checkbox" id="headerSelect" title="Toggle all visible rows" aria-label="Select all visible">
+                </th>
+                <th>Artist</th>
+                <th>Title</th>
+                <th>Origin</th>
+                <th>Duration</th>
+                <th class="row-actions">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for s in songs %}
+                <tr data-id="{{ s.id }}" data-search="{{ (s.artist ~ ' ' ~ s.title)|lower }}">
+                  <td class="checkbox-col">
+                    <input type="checkbox" class="row-check" data-id="{{ s.id }}" aria-label="Select {{ s.artist }} — {{ s.title }}">
+                  </td>
+                  <td>{{ s.artist or '—' }}</td>
+                  <td>{{ s.title or '—' }}</td>
+                  <td>
+                    {% set o = s.origin or 'global' %}
+                    <span class="badge {{ o }}">{{ o }}</span>
+                  </td>
+                  <td>{% if s.duration %}{{ '%.1f' % s.duration }}s{% else %}—{% endif %}</td>
+                  <td class="row-actions">
+                    <a class="btn ghost" href="/api/songs/{{ s.id }}/clip/1" target="_blank" rel="noopener">Preview</a>
+                    <button class="btn danger" data-delete="{{ s.id }}" data-label="{{ s.artist }} — {{ s.title }}">Delete</button>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <div class="empty">Library is empty. Add a song with a YouTube link above.</div>
+        {% endif %}
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const TOKEN = {{ token|tojson }};
+
+    function authHeaders(extra) {
+      const h = Object.assign({ "Content-Type": "application/json" }, extra || {});
+      if (TOKEN) h["X-Auth-Token"] = TOKEN;
+      return h;
+    }
+
+    function setStatus(el, kind, text) {
+      el.className = "status show " + kind;
+      el.textContent = text;
+    }
+
+    async function pollJob(jobId, onLine) {
+      while (true) {
+        const r = await fetch(`/api/jobs/${jobId}`, { headers: authHeaders() });
+        if (!r.ok) throw new Error(`job lookup failed: ${r.status}`);
+        const job = await r.json();
+        if (onLine && Array.isArray(job.log)) onLine(job);
+        if (job.status === "done" || job.status === "failed" || job.status === "cancelled") {
+          return job;
+        }
+        await new Promise(res => setTimeout(res, 800));
+      }
+    }
+
+    // ---- Add by URL ------------------------------------------------------
+    const form = document.getElementById("addForm");
+    const addStatus = document.getElementById("addStatus");
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const payload = {
+        url: (fd.get("url") || "").toString().trim(),
+        artist: (fd.get("artist") || "").toString().trim(),
+        title: (fd.get("title") || "").toString().trim(),
+        origin: (fd.get("origin") || "global").toString(),
+        overwrite: fd.get("overwrite") ? true : false,
+      };
+      const btn = form.querySelector("button[type=submit]");
+      btn.disabled = true;
+      setStatus(addStatus, "running", `Queuing "${payload.artist} — ${payload.title}"…`);
+      try {
+        const r = await fetch("/api/songs/by_url", {
+          method: "POST",
+          headers: authHeaders(),
+          body: JSON.stringify(payload),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data && data.error ? data.error : `HTTP ${r.status}`);
+        const jobId = data.job && data.job.id;
+        if (!jobId) throw new Error("no job id returned");
+        setStatus(addStatus, "running", `Working… job ${jobId}`);
+        const job = await pollJob(jobId, (j) => {
+          const tail = (j.log || []).slice(-12).join("\n");
+          setStatus(addStatus, "running", `Working… (${j.status})\n\n${tail}`);
+        });
+        if (job.status === "done") {
+          setStatus(addStatus, "ok", `Added "${payload.artist} — ${payload.title}". Reloading…`);
+          setTimeout(() => location.reload(), 900);
+        } else {
+          const tail = (job.log || []).slice(-12).join("\n");
+          setStatus(addStatus, "err", `Failed: ${job.error || "unknown error"}\n\n${tail}`);
+        }
+      } catch (err) {
+        setStatus(addStatus, "err", `Error: ${err.message || err}`);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    // ---- Bulk selection & mass delete ------------------------------------
+    const headerSelect = document.getElementById("headerSelect");
+    const bulkCountEl = document.getElementById("bulkCount");
+    const bulkDeleteBtn = document.getElementById("bulkDeleteBtn");
+
+    function allBodyRows() {
+      return document.querySelectorAll("#songTable tbody tr");
+    }
+
+    function visibleBodyRows() {
+      return [...allBodyRows()].filter((r) => r.style.display !== "none");
+    }
+
+    function countSelected() {
+      return document.querySelectorAll("#songTable tbody tr .row-check:checked").length;
+    }
+
+    function updateBulkUI() {
+      const n = countSelected();
+      if (bulkCountEl) bulkCountEl.textContent = n + " selected";
+      if (bulkDeleteBtn) bulkDeleteBtn.disabled = n === 0;
+      syncHeaderCheckbox();
+    }
+
+    function syncHeaderCheckbox() {
+      if (!headerSelect) return;
+      const vis = visibleBodyRows();
+      const checks = vis.map((r) => r.querySelector(".row-check")).filter(Boolean);
+      if (checks.length === 0) {
+        headerSelect.checked = false;
+        headerSelect.indeterminate = false;
+        return;
+      }
+      const on = checks.filter((c) => c.checked).length;
+      headerSelect.checked = on === checks.length;
+      headerSelect.indeterminate = on > 0 && on < checks.length;
+    }
+
+    if (headerSelect) {
+      headerSelect.addEventListener("change", () => {
+        const on = headerSelect.checked;
+        visibleBodyRows().forEach((row) => {
+          const cb = row.querySelector(".row-check");
+          if (cb) cb.checked = on;
+        });
+        headerSelect.indeterminate = false;
+        updateBulkUI();
+      });
+    }
+
+    document.querySelectorAll(".row-check").forEach((cb) => {
+      cb.addEventListener("change", updateBulkUI);
+    });
+
+    const selectVisibleBtn = document.getElementById("selectVisibleBtn");
+    if (selectVisibleBtn) {
+      selectVisibleBtn.addEventListener("click", () => {
+        visibleBodyRows().forEach((row) => {
+          const cb = row.querySelector(".row-check");
+          if (cb) cb.checked = true;
+        });
+        updateBulkUI();
+      });
+    }
+
+    const selectAllBtn = document.getElementById("selectAllBtn");
+    if (selectAllBtn) {
+      selectAllBtn.addEventListener("click", () => {
+        allBodyRows().forEach((row) => {
+          const cb = row.querySelector(".row-check");
+          if (cb) cb.checked = true;
+        });
+        updateBulkUI();
+      });
+    }
+
+    const clearSelectionBtn = document.getElementById("clearSelectionBtn");
+    if (clearSelectionBtn) {
+      clearSelectionBtn.addEventListener("click", () => {
+        document.querySelectorAll(".row-check").forEach((cb) => {
+          cb.checked = false;
+        });
+        if (headerSelect) {
+          headerSelect.checked = false;
+          headerSelect.indeterminate = false;
+        }
+        updateBulkUI();
+      });
+    }
+
+    if (bulkDeleteBtn) {
+      bulkDeleteBtn.addEventListener("click", async () => {
+        const ids = [...document.querySelectorAll(".row-check:checked")].map(
+          (cb) => cb.getAttribute("data-id") || ""
+        ).filter(Boolean);
+        if (ids.length === 0) return;
+        if (
+          !confirm(
+            `Delete ${ids.length} song(s)?\n\nThis removes their folders and clips. This cannot be undone.`
+          )
+        ) {
+          return;
+        }
+        bulkDeleteBtn.disabled = true;
+        const originalText = bulkDeleteBtn.textContent;
+        bulkDeleteBtn.textContent = "Deleting…";
+        try {
+          const r = await fetch("/api/songs/bulk_delete", {
+            method: "POST",
+            headers: authHeaders(),
+            body: JSON.stringify({ ids }),
+          });
+          const data = await r.json();
+          if (!r.ok) throw new Error(data && data.error ? data.error : `HTTP ${r.status}`);
+          const jobId = data.job && data.job.id;
+          if (jobId) await pollJob(jobId);
+          ids.forEach((id) => {
+            allBodyRows().forEach((row) => {
+              if (row.dataset.id === id) row.remove();
+            });
+          });
+          const remaining = document.querySelectorAll("#songTable tbody tr").length;
+          const libCount = document.getElementById("libCount");
+          if (libCount) libCount.textContent = `${remaining} songs`;
+          document.querySelectorAll(".row-check").forEach((cb) => {
+            cb.checked = false;
+          });
+          if (headerSelect) {
+            headerSelect.checked = false;
+            headerSelect.indeterminate = false;
+          }
+          updateBulkUI();
+          if (remaining === 0) location.reload();
+        } catch (err) {
+          alert(`Bulk delete failed: ${err.message || err}`);
+        } finally {
+          bulkDeleteBtn.textContent = originalText;
+          bulkDeleteBtn.disabled = countSelected() === 0;
+        }
+      });
+    }
+
+    updateBulkUI();
+
+    // ---- Delete ----------------------------------------------------------
+    document.querySelectorAll("button[data-delete]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const id = btn.dataset.delete;
+        const label = btn.dataset.label || id;
+        if (!confirm(`Delete "${label}"?\n\nThis removes its folder and clips.`)) return;
+        btn.disabled = true;
+        const original = btn.textContent;
+        btn.textContent = "Deleting…";
+        try {
+          const r = await fetch(`/api/songs/${encodeURIComponent(id)}`, {
+            method: "DELETE",
+            headers: authHeaders(),
+          });
+          const data = await r.json();
+          if (!r.ok) throw new Error(data && data.error ? data.error : `HTTP ${r.status}`);
+          const jobId = data.job && data.job.id;
+          if (jobId) await pollJob(jobId);
+          const row = btn.closest("tr");
+          if (row) row.remove();
+          const remaining = document.querySelectorAll("#songTable tbody tr").length;
+          const libEl = document.getElementById("libCount");
+          if (libEl) libEl.textContent = `${remaining} songs`;
+          updateBulkUI();
+        } catch (err) {
+          alert(`Delete failed: ${err.message || err}`);
+          btn.disabled = false;
+          btn.textContent = original;
+        }
+      });
+    });
+
+    // ---- Filter ----------------------------------------------------------
+    const filter = document.getElementById("filter");
+    if (filter) {
+      filter.addEventListener("input", () => {
+        const q = filter.value.trim().toLowerCase();
+        document.querySelectorAll("#songTable tbody tr").forEach(row => {
+          const hay = row.dataset.search || "";
+          row.style.display = !q || hay.includes(q) ? "" : "none";
+        });
+        updateBulkUI();
+      });
+    }
+  </script>
+</body>
+</html>

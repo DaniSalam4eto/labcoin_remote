@@ -1,0 +1,15 @@
+<div class="card">
+  <div class="title">
+    {{ s.title }}
+    <span class="badge {{ s.origin or 'global' }}">{{ s.origin or 'global' }}</span>
+  </div>
+  <div class="artist">{{ s.artist }}</div>
+  <div class="clips">
+    {% for n in range(1, 5) %}
+      <div class="clip">
+        <label>Clip {{ n }}</label>
+        <audio controls preload="none" src="/api/songs/{{ s.id }}/clip/{{ n }}"></audio>
+      </div>
+    {% endfor %}
+  </div>
+</div>

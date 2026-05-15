@@ -1,0 +1,24 @@
+{
+  "id": "V_RGO_LIDIA_-_TVOQTA_LUBOV",
+  "artist": "V:RGO, LIDIA",
+  "title": "TVOQTA LUBOV",
+  "origin": "global",
+  "added_at": "2026-05-14T19:37:18Z",
+  "duration": 148.050431,
+  "youtube_id": "8mqwpXumn0k",
+  "youtube_title": "V:RGO, LIDIA - TVOQTA LUBOV [Official Video]",
+  "youtube_url": "https://www.youtube.com/watch?v=8mqwpXumn0k",
+  "chart_source": "manual-url",
+  "clip_positions": [
+    27.859850134266473,
+    48.395429622926216,
+    77.14578433052272,
+    110.83282713498319
+  ],
+  "clips": [
+    "clip_1.m4a",
+    "clip_2.m4a",
+    "clip_3.m4a",
+    "clip_4.m4a"
+  ]
+}

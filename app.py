@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import math
 import sys
+import threading
 import time
 import ctypes
 from dataclasses import dataclass, field
@@ -37,6 +38,13 @@ from doodle import (
 from esp32_connector import Esp32Connector, Event, NUMPAD_BUTTONS
 import strings_bg
 import strings_en
+from game_audio import (
+    ClipPlayer,
+    LibraryEmpty,
+    SongPick,
+    pick_random_song,
+    pick_same_song_other_clip,
+)
 
 ROOT = Path(__file__).parent
 LOGOS = ROOT / "logos"
@@ -96,6 +104,14 @@ BUTTON_CHECK_SEQUENCE = [
     3,   # Numpad 10
 ]
 
+# Remote simultaneous hold heuristic (pulse refresh within this window ⇒ key "live").
+REMOTE_PULSE_LIVENESS_S = 0.50
+DUAL_CHECK_HOLD_NEED_S = 2.00
+# Full-screen ranking after each round; host can skip early with Check / Enter.
+LEADERBOARD_ANIM_S = 1.15
+LEADERBOARD_ROW_STAGGER_S = 0.09
+LEADERBOARD_AUTO_ADVANCE_S = 14.0
+
 # Pygame keyboard equivalents so the GUI is testable without the remote.
 KEY_DIGIT_MAP = {
     pygame.K_KP1: 1, pygame.K_1: 1,
@@ -132,6 +148,17 @@ class Screen(Enum):
     PLAYING = auto()
 
 
+class PlayingPhase(Enum):
+    """Gameplay sub-state while :data:`Screen.PLAYING` is active."""
+
+    CLIP_1 = auto()
+    WAIT_REVEAL = auto()
+    CLIP_2 = auto()
+    WAIT_CONFIRM = auto()
+    WAIT_ADVANCE = auto()
+    LEADERBOARD = auto()
+
+
 @dataclass
 class AppState:
     screen: Screen = Screen.SETUP
@@ -147,10 +174,29 @@ class AppState:
     last_button_at: float = 0.0
     fullscreen: bool = False
     lang_check_armed_until: float = 0.0
+    current_round: int = 0
+    current_song: Optional[SongPick] = None
+    round_started_at: float = 0.0
+    play_error: str = ""
+    recent_song_ids: list[str] = field(default_factory=list)
+    rounds_finished: bool = False
+    playing_phase: PlayingPhase = PlayingPhase.CLIP_1
+    guessed_player: Optional[int] = None
+    buzz_resume_phase: PlayingPhase = PlayingPhase.CLIP_1
+    remote_btn_pulse_mono: dict[int, float] = field(default_factory=dict)
+    dual_check_hold_accum_s: float = 0.0
+    player_scores: list[int] = field(default_factory=lambda: [0] * 11)
+    playback_ignore_until: float = 0.0
+    leaderboard_started_at: float = 0.0
 
 
 class App:
     def __init__(self) -> None:
+        # Pre-init the mixer for low-latency clip playback; init() honours it.
+        try:
+            pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=512)
+        except pygame.error:
+            pass
         pygame.init()
         self.L = strings_en
         pygame.display.set_caption(self.L.WINDOW_TITLE)
@@ -159,6 +205,7 @@ class App:
         self.theme = Theme.make(rounded_display=self.L is strings_bg)
         self.state = AppState(status_text=self.L.STATUS_DEFAULT)
         self.connector = Esp32Connector()
+        self.clip_player = ClipPlayer()
 
         # Load the game logo + note PNGs.
         self.game_logo = load_image_alpha(LOGOS / "gamelogo.avif")
@@ -210,7 +257,7 @@ class App:
         self.right_notes.resize(pygame.Rect(w - margin, 0, margin, h))
 
     def _lang_toggle_allowed_screen(self) -> bool:
-        return self.state.screen != Screen.BUTTON_CHECK
+        return self.state.screen not in (Screen.BUTTON_CHECK, Screen.PLAYING)
 
     def _toggle_locale(self) -> None:
         self.L = strings_bg if self.L is strings_en else strings_en
@@ -242,9 +289,12 @@ class App:
         return scaled
 
     def set_screen(self, screen: Screen, *, status: Optional[str] = None) -> None:
+        prev = self.state.screen
         self.state.screen = screen
         if status is not None:
             self.state.status_text = status
+        if screen == Screen.MAIN_MENU and prev != Screen.MAIN_MENU:
+            self._push_leaderboard_remote()
 
     def _all_button_check_tiles_pressed(self) -> bool:
         st = self.state
@@ -357,6 +407,30 @@ class App:
             self._pick_player_count(ev.digit)
         elif st.screen == Screen.ROUND_SELECT and ev.digit is not None:
             self._pick_round_count(ev.digit)
+        elif st.screen == Screen.PLAYING:
+            mono = time.monotonic()
+            if ev.button is not None:
+                st.remote_btn_pulse_mono[ev.button] = mono
+            if st.rounds_finished:
+                if ev.button == LANG_TOGGLE_CHECK_BTN:
+                    self._end_game_and_return_to_menu()
+                return
+            if ev.digit is not None:
+                self._register_guess(ev.digit)
+                return
+            if ev.button == LANG_TOGGLE_CHECK_BTN:
+                ph = st.playing_phase
+                if ph == PlayingPhase.WAIT_REVEAL:
+                    self._play_second_clip()
+                elif ph == PlayingPhase.WAIT_CONFIRM:
+                    self._confirm_buzz_scoring(1)
+                elif ph == PlayingPhase.WAIT_ADVANCE:
+                    self._finalize_round_go_next()
+                elif ph == PlayingPhase.LEADERBOARD:
+                    self._dismiss_leaderboard_and_next_round()
+                return
+            if ev.button == 2 and st.playing_phase == PlayingPhase.WAIT_CONFIRM:
+                self._confirm_buzz_scoring(2)
 
     def _remote_activate_primary(self, ev: Event) -> bool:
         """Handle screens whose main control is Start / Reload / Continue.
@@ -389,13 +463,287 @@ class App:
 
     def _pick_player_count(self, n: int) -> None:
         self.state.player_count = n
+        self.state.player_scores = [0] * 11
         self.set_screen(Screen.ROUND_SELECT,
                         status=self.L.STATUS_ROUNDS)
 
     def _pick_round_count(self, n: int) -> None:
         self.state.round_count = n
+        self.state.current_round = 0
+        self.state.current_song = None
+        self.state.recent_song_ids = []
+        self.state.rounds_finished = False
+        self.state.play_error = ""
+        self.state.playing_phase = PlayingPhase.CLIP_1
+        self.state.guessed_player = None
+        self.state.remote_btn_pulse_mono.clear()
+        self.state.dual_check_hold_accum_s = 0.0
+        self.state.player_scores = [0] * 11
         self.state.countdown_start = time.monotonic()
         self.set_screen(Screen.COUNTDOWN, status="")
+
+    # ------------------------------------------------------------ game helpers
+
+    def _playing_guess_allowed(self) -> bool:
+        st = self.state
+        if st.screen != Screen.PLAYING or st.rounds_finished or st.play_error:
+            return False
+        return st.playing_phase in (PlayingPhase.CLIP_1, PlayingPhase.CLIP_2)
+
+    def _register_guess(self, digit: int) -> None:
+        st = self.state
+        if not self._playing_guess_allowed():
+            return
+        if digit < 1 or digit > st.player_count:
+            return
+        if st.guessed_player is not None:
+            return
+        st.guessed_player = digit
+        st.buzz_resume_phase = st.playing_phase
+        self.clip_player.buzz_pause()
+        st.playing_phase = PlayingPhase.WAIT_CONFIRM
+        st.dual_check_hold_accum_s = 0.0
+        st.status_text = self.L.PLAYING_HINT_WAIT_CONFIRM
+
+    def _leaderboard_ranked_pairs(self) -> list[tuple[int, int]]:
+        pc = self.state.player_count
+        pairs = [(p, self.state.player_scores[p]) for p in range(1, max(1, pc + 1))]
+        pairs.sort(key=lambda x: (-x[1], x[0]))
+        return pairs
+
+    def _format_leaderboard_lines(self) -> tuple[str, str]:
+        pairs = self._leaderboard_ranked_pairs()
+        short = " ".join(f"P{p}:{s}" for p, s in pairs)
+        if len(short) > 52:
+            short = short[:49] + "…"
+        return self.L.LEADERBOARD_TITLE, short or "—"
+
+    def _push_leaderboard_remote(self) -> None:
+        if self.state.player_count <= 0:
+            return
+        top, ranks = self._format_leaderboard_lines()
+        self.connector.send_leaderboard(top, ranks)
+
+    def _finalize_round_go_next(self) -> None:
+        self._push_leaderboard_remote()
+        st = self.state
+        st.playing_phase = PlayingPhase.LEADERBOARD
+        st.leaderboard_started_at = time.monotonic()
+        st.status_text = self.L.PLAYING_LEADERBOARD_HINT
+
+    def _dismiss_leaderboard_and_next_round(self) -> None:
+        if self.state.playing_phase != PlayingPhase.LEADERBOARD:
+            return
+        self._start_next_round()
+
+    def _apply_clip_pick(self, pick: SongPick) -> None:
+        st = self.state
+        st.current_song = pick
+
+        ok = self.clip_player.play(pick.clip_path)
+        if not ok:
+            st.play_error = self.L.PLAYING_AUDIO_ERROR
+            st.playback_ignore_until = 0.0
+        else:
+            st.play_error = ""
+            st.playback_ignore_until = time.monotonic() + 0.22
+
+        pushed = self.connector.send_song(pick.artist, pick.title)
+        if pushed:
+            st.status_text = self.L.PLAYING_STATUS
+        else:
+            st.status_text = self.L.PLAYING_REMOTE_OFFLINE
+
+    def _play_second_clip(self) -> None:
+        st = self.state
+        song = st.current_song
+        if song is None:
+            st.playing_phase = PlayingPhase.WAIT_ADVANCE
+            st.status_text = self.L.PLAYING_HINT_WAIT_ADVANCE
+            return
+        try:
+            clip_index, path = pick_same_song_other_clip(song.song_id, song.clip_index)
+        except LibraryEmpty:
+            st.playing_phase = PlayingPhase.WAIT_ADVANCE
+            self.clip_player.stop()
+            st.status_text = self.L.PLAYING_HINT_WAIT_ADVANCE
+            return
+
+        pick = SongPick(
+            song_id=song.song_id,
+            artist=song.artist,
+            title=song.title,
+            origin=song.origin,
+            clip_index=clip_index,
+            clip_path=path,
+        )
+        st.playing_phase = PlayingPhase.CLIP_2
+        self._apply_clip_pick(pick)
+        hint = "" if st.play_error else self.L.PLAYING_HINT_CLIP2
+        if hint:
+            st.status_text = hint
+
+    def _playback_check_pressed(self) -> None:
+        st = self.state
+        ph = st.playing_phase
+        if ph == PlayingPhase.WAIT_REVEAL:
+            self._play_second_clip()
+        elif ph == PlayingPhase.WAIT_CONFIRM:
+            self._confirm_buzz_scoring(1)
+        elif ph == PlayingPhase.WAIT_ADVANCE:
+            self._finalize_round_go_next()
+        elif ph == PlayingPhase.LEADERBOARD:
+            self._dismiss_leaderboard_and_next_round()
+
+    def _confirm_buzz_scoring(self, points: int) -> None:
+        st = self.state
+        gp = st.guessed_player
+        st.dual_check_hold_accum_s = 0.0
+        if gp is not None and 1 <= gp < len(st.player_scores):
+            st.player_scores[gp] += max(0, points)
+        st.guessed_player = None
+        self.clip_player.stop()
+        self._finalize_round_go_next()
+
+    def _void_buzz_false_alarm(self) -> None:
+        """Host holds Check + Double check ~2 s — mistaken buzz; resume playback."""
+
+        st = self.state
+        st.dual_check_hold_accum_s = 0.0
+        st.guessed_player = None
+        rp = st.buzz_resume_phase
+        self.clip_player.undo_buzz_pause()
+        if rp not in (PlayingPhase.CLIP_1, PlayingPhase.CLIP_2):
+            return
+        st.playing_phase = rp
+        song = st.current_song
+        if song is None:
+            return
+        pushed = self.connector.send_song(song.artist, song.title)
+        if pushed:
+            st.status_text = (
+                self.L.PLAYING_HINT_CLIP2
+                if rp == PlayingPhase.CLIP_2
+                else self.L.PLAYING_STATUS
+            )
+        else:
+            st.status_text = self.L.PLAYING_REMOTE_OFFLINE
+
+    def _advance_after_clip_finished(self) -> None:
+        st = self.state
+        ph = st.playing_phase
+        if ph == PlayingPhase.CLIP_1:
+            self.clip_player.stop()
+            st.playing_phase = PlayingPhase.WAIT_REVEAL
+            mix = []
+            guess = self.L.PLAYING_HINT_GUESS.format(n=st.player_count)
+            mix.append(self.L.PLAYING_HINT_WAIT_REVEAL)
+            mix.append(guess)
+            st.status_text = " ".join(mix)
+        elif ph == PlayingPhase.CLIP_2:
+            self.clip_player.stop()
+            st.playing_phase = PlayingPhase.WAIT_ADVANCE
+            st.status_text = self.L.PLAYING_HINT_WAIT_ADVANCE
+
+    def _playing_dual_check_hold(self, dt: float) -> None:
+        """Hosts must hold physical Check + Double-check together (~2 s) to undo a buzz.
+
+        Firmware should emit repeated pulses while switches are depressed; pulses
+        are treated as alive for :data:`REMOTE_PULSE_LIVENESS_S`.
+        On PC testing, use ``[`` and ``]``.
+        """
+
+        st = self.state
+        if st.screen != Screen.PLAYING or st.playing_phase != PlayingPhase.WAIT_CONFIRM:
+            return
+        now = time.monotonic()
+        liveness = REMOTE_PULSE_LIVENESS_S
+        pulse1 = (now - st.remote_btn_pulse_mono.get(1, -1e9)) <= liveness
+        pulse2 = (now - st.remote_btn_pulse_mono.get(2, -1e9)) <= liveness
+        if pulse1 and pulse2:
+            st.dual_check_hold_accum_s += dt
+            if st.dual_check_hold_accum_s >= DUAL_CHECK_HOLD_NEED_S:
+                self._void_buzz_false_alarm()
+        else:
+            st.dual_check_hold_accum_s = 0.0
+
+    def _playing_pulse_brackets_keys(self) -> None:
+        """Treat ``[` and ``]`` as simultaneous Check / Double-check for local testing."""
+
+        st = self.state
+        if st.screen != Screen.PLAYING or st.playing_phase != PlayingPhase.WAIT_CONFIRM:
+            return
+        keys = pygame.key.get_pressed()
+        now = time.monotonic()
+        if keys[pygame.K_LEFTBRACKET]:
+            st.remote_btn_pulse_mono[1] = now
+        if keys[pygame.K_RIGHTBRACKET]:
+            st.remote_btn_pulse_mono[2] = now
+
+    def _playing_poll_clip_end(self) -> None:
+        st = self.state
+        if st.screen != Screen.PLAYING:
+            return
+        if st.rounds_finished or st.play_error:
+            return
+        if time.monotonic() < st.playback_ignore_until:
+            return
+        if self.clip_player.buzz_paused():
+            return
+        if self.clip_player.is_playing():
+            return
+        ph = st.playing_phase
+        if ph == PlayingPhase.CLIP_1 and st.current_song is not None:
+            self._advance_after_clip_finished()
+        elif ph == PlayingPhase.CLIP_2:
+            self._advance_after_clip_finished()
+
+    # ------------------------------------------------------------ game loop
+
+    def _start_next_round(self) -> None:
+        """Advance to another round entry: clip 1 of a freshly picked song."""
+        st = self.state
+        if st.current_round >= st.round_count and st.round_count > 0:
+            st.rounds_finished = True
+            self.clip_player.stop()
+            st.current_song = None
+            st.status_text = self.L.PLAYING_FINISHED
+            return
+
+        try:
+            pick = pick_random_song(
+                exclude_song_ids=tuple(st.recent_song_ids),
+            )
+        except LibraryEmpty:
+            st.current_song = None
+            st.play_error = self.L.PLAYING_NO_LIBRARY
+            st.status_text = self.L.PLAYING_NO_LIBRARY
+            st.playing_phase = PlayingPhase.CLIP_1
+            return
+
+        st.round_started_at = time.monotonic()
+        st.current_round = max(1, st.current_round + 1)
+        st.recent_song_ids.append(pick.song_id)
+        if len(st.recent_song_ids) > 24:
+            del st.recent_song_ids[: len(st.recent_song_ids) - 24]
+
+        st.guessed_player = None
+        st.remote_btn_pulse_mono.clear()
+        st.dual_check_hold_accum_s = 0.0
+        st.playing_phase = PlayingPhase.CLIP_1
+        self._apply_clip_pick(pick)
+
+    def _end_game_and_return_to_menu(self) -> None:
+        self.clip_player.stop()
+        self.state.current_song = None
+        self.state.current_round = 0
+        self.state.rounds_finished = False
+        self.state.play_error = ""
+        self.state.playing_phase = PlayingPhase.CLIP_1
+        self.state.guessed_player = None
+        self.state.remote_btn_pulse_mono.clear()
+        self.state.dual_check_hold_accum_s = 0.0
+        self.set_screen(Screen.MAIN_MENU, status="")
 
     # ------------------------------------------------------------------ frame
 
@@ -433,6 +781,7 @@ class App:
             pygame.display.flip()
 
         self.connector.stop()
+        self.clip_player.close()
         pygame.quit()
 
     def _handle_keydown(self, event: pygame.event.Event) -> None:
@@ -448,15 +797,32 @@ class App:
                 self._begin_button_check()
             elif st.screen == Screen.BUTTON_CHECK and self._button_check_can_continue():
                 self._finish_button_check()
+            elif st.screen == Screen.PLAYING:
+                if st.rounds_finished:
+                    self._end_game_and_return_to_menu()
+                elif not st.play_error:
+                    self._playback_check_pressed()
         elif event.key == pygame.K_F1 and st.screen == Screen.BUTTON_CHECK:
             # Dev shortcut: skip button check.
             self._finish_button_check()
+        elif event.key == pygame.K_BACKSPACE and st.screen == Screen.PLAYING:
+            self._end_game_and_return_to_menu()
+        elif (
+            event.key == pygame.K_F2
+            and st.screen == Screen.PLAYING
+            and st.playing_phase == PlayingPhase.WAIT_CONFIRM
+            and not st.rounds_finished
+        ):
+            self._confirm_buzz_scoring(2)
         elif event.key in KEY_DIGIT_MAP:
             digit = KEY_DIGIT_MAP[event.key]
             if st.screen == Screen.MAIN_MENU:
                 self._pick_player_count(digit)
             elif st.screen == Screen.ROUND_SELECT:
                 self._pick_round_count(digit)
+            elif st.screen == Screen.PLAYING:
+                if not st.rounds_finished:
+                    self._register_guess(digit)
             elif st.screen == Screen.BUTTON_CHECK:
                 if self._button_check_can_continue():
                     self._finish_button_check()
@@ -508,6 +874,14 @@ class App:
             if elapsed >= 11:
                 self.set_screen(Screen.PLAYING,
                                 status=self.L.PLAYING_STATUS)
+                self._start_next_round()
+        elif st.screen == Screen.PLAYING:
+            self._playing_dual_check_hold(dt)
+            self._playing_pulse_brackets_keys()
+            if st.playing_phase == PlayingPhase.LEADERBOARD:
+                if time.monotonic() - st.leaderboard_started_at >= LEADERBOARD_AUTO_ADVANCE_S:
+                    self._dismiss_leaderboard_and_next_round()
+            self._playing_poll_clip_end()
 
     # ------------------------------------------------------------------ draw
 
@@ -928,23 +1302,248 @@ class App:
                           self.theme.body_font, INK_SOFT,
                           (cx, cy + 220), anchor="center", shadow=False)
 
+    @staticmethod
+    def _smoothstep01(x: float) -> float:
+        x = max(0.0, min(1.0, x))
+        return x * x * (3.0 - 2.0 * x)
+
+    def _draw_leaderboard_phase(self, t: float) -> None:
+        """Kahoot-style full-screen ranking between rounds."""
+
+        w, h = self.screen.get_size()
+        st = self.state
+        elapsed = time.monotonic() - st.leaderboard_started_at
+        pairs = self._leaderboard_ranked_pairs()
+        max_pts = max((s for _, s in pairs), default=1)
+
+        draw_doodle_text(
+            self.screen,
+            self.L.LEADERBOARD_TITLE,
+            self.theme.title_font,
+            ACCENT_YELLOW,
+            (w // 2, 52),
+            anchor="center",
+        )
+        if st.round_count:
+            round_label = self.L.PLAYING_ROUND.format(
+                n=max(1, st.current_round), total=st.round_count
+            )
+            draw_doodle_text(
+                self.screen,
+                round_label,
+                self.theme.body_font,
+                ACCENT_CYAN,
+                (w // 2, 102),
+                anchor="center",
+                shadow=False,
+            )
+
+        rank_colors: list[tuple[int, int, int]] = [
+            (255, 215, 0),
+            (186, 198, 218),
+            (205, 127, 50),
+        ]
+        fallback = (
+            ACCENT_CYAN,
+            ACCENT_PINK,
+            ACCENT_GREEN,
+            ACCENT_YELLOW,
+            PURPLE,
+            ACCENT_BLUE,
+        )
+
+        bar_left = max(80, w // 12)
+        bar_right_margin = 40
+        bar_w_max = w - bar_left - bar_right_margin
+        n = len(pairs)
+        row_h = max(30, min(52, (h - 240) // max(n, 1)))
+        gap = max(8, row_h // 6)
+        total_h = n * (row_h + gap) - gap
+        start_y = (h - total_h) // 2 + 36
+
+        for i, (player, score) in enumerate(pairs):
+            if i < len(rank_colors):
+                accent = rank_colors[i]
+            else:
+                accent = fallback[(i - len(rank_colors)) % len(fallback)]
+
+            stagger = i * LEADERBOARD_ROW_STAGGER_S
+            raw_p = (elapsed - stagger) / LEADERBOARD_ANIM_S
+            prog = self._smoothstep01(raw_p)
+
+            y = start_y + i * (row_h + gap)
+            row_rect = pygame.Rect(bar_left, y, bar_w_max, row_h)
+
+            pygame.draw.rect(self.screen, PANEL_HI, row_rect, border_radius=12)
+            pygame.draw.rect(
+                self.screen,
+                doodle._shade(PANEL_HI, 0.35),
+                row_rect,
+                width=1,
+                border_radius=12,
+            )
+
+            fill_w = int(row_rect.width * (score / max_pts) * prog)
+            if fill_w > 4:
+                fr = pygame.Rect(row_rect.left, row_rect.top, fill_w, row_rect.height)
+                pygame.draw.rect(
+                    self.screen,
+                    doodle._shade(accent, 0.42),
+                    fr.move(0, 3),
+                    border_radius=10,
+                )
+                pygame.draw.rect(self.screen, accent, fr, border_radius=10)
+
+            rk_surf = self.theme.small_font.render(str(i + 1), True, (18, 22, 30))
+            pill_w = max(46, rk_surf.get_width() + 20)
+            pill = pygame.Rect(0, 0, pill_w, row_h - 8)
+            pill.centery = row_rect.centery
+            pill.right = bar_left - 10
+            pygame.draw.rect(self.screen, accent, pill, border_radius=10)
+            self.screen.blit(rk_surf, rk_surf.get_rect(center=pill.center))
+
+            label = self.L.LEADERBOARD_PLAYER.format(n=player)
+            lbl = self.theme.body_font.render(label, True, INK)
+            self.screen.blit(
+                lbl,
+                (row_rect.left + 14, row_rect.centery - lbl.get_height() // 2),
+            )
+
+            pts_txt = self.theme.body_font.render(str(score), True, INK_SOFT)
+            self.screen.blit(
+                pts_txt,
+                pts_txt.get_rect(midright=(row_rect.right - 12, row_rect.centery)),
+            )
+
     def _draw_playing(self, t: float) -> None:
         w, h = self.screen.get_size()
-        draw_doodle_text(self.screen, self.L.PLAYING_TITLE,
-                          self.theme.huge_font, ACCENT_GREEN,
-                          (w // 2, h // 2 - 60), anchor="center")
-        draw_doodle_text(self.screen,
-                          self.L.rounds_count_bg(self.state.player_count,
-                                               self.state.round_count),
-                          self.theme.title_font, INK,
-                          (w // 2, h // 2 + 60), anchor="center", shadow=False)
+        st = self.state
+
+        if st.play_error:
+            # No library / mixer broken — surface the problem instead of the song.
+            draw_doodle_text(self.screen, self.L.PLAYING_TITLE,
+                              self.theme.huge_font, ACCENT_PINK,
+                              (w // 2, h // 2 - 90), anchor="center")
+            draw_doodle_text(self.screen, st.play_error,
+                              self.theme.body_font, INK,
+                              (w // 2, h // 2 + 20), anchor="center", shadow=False)
+            draw_doodle_text(self.screen, self.L.PLAYING_NOTE,
+                              self.theme.small_font, INK_DIM,
+                              (w // 2, h // 2 + 110), anchor="center", shadow=False)
+            return
+
+        if st.playing_phase == PlayingPhase.LEADERBOARD:
+            self._draw_leaderboard_phase(t)
+            return
+
+        # Round counter strip across the top.
+        if st.round_count:
+            round_idx = max(1, st.current_round)
+            round_label = self.L.PLAYING_ROUND.format(n=round_idx, total=st.round_count)
+        else:
+            round_label = ""
+        if round_label:
+            draw_doodle_text(self.screen, round_label,
+                              self.theme.body_font, ACCENT_CYAN,
+                              (w // 2, 70), anchor="center", shadow=False)
+
+        if st.rounds_finished:
+            draw_doodle_text(self.screen, self.L.PLAYING_TITLE,
+                              self.theme.huge_font, ACCENT_GREEN,
+                              (w // 2, h // 2 - 60), anchor="center")
+            draw_doodle_text(self.screen,
+                              self.L.PLAYING_FINISHED,
+                              self.theme.body_font, INK,
+                              (w // 2, h // 2 + 50), anchor="center", shadow=False)
+            return
+
+        playing = self.clip_player.is_playing() and not self.clip_player.buzz_paused()
+        pulse_rate = 5.0 if playing else 1.15
+        idle_amp = 0.28
+        bar_count = max(28, min(64, w // 16))
+        levels, audio_synced = self.clip_player.get_visual_levels(bar_count)
+
+        bar_w = max(3, (w - 160) // (bar_count * 2))
+        gap = max(2, bar_w // 3)
+        total_w = bar_count * bar_w + (bar_count - 1) * gap
+        bx = w // 2 - total_w // 2
+        by = h // 2 + 40
+        max_h = min(220, int(h * 0.38))
+        colors = (ACCENT_CYAN, ACCENT_PINK, ACCENT_GREEN, ACCENT_YELLOW, PURPLE)
+        for i in range(bar_count):
+            if audio_synced and i < len(levels):
+                norm = float(levels[i])
+            else:
+                phase = t * pulse_rate + i * 0.45
+                norm = (0.5 + 0.5 * math.sin(phase)) * idle_amp
+            height = int(10 + (max_h - 10) * norm)
+            color = colors[i % len(colors)]
+            x = bx + i * (bar_w + gap)
+            slab = pygame.Rect(x, by - height, bar_w, height)
+            pygame.draw.rect(
+                self.screen,
+                doodle._shade(color, 0.42),
+                slab.move(0, 4),
+                border_radius=4,
+            )
+            pygame.draw.rect(self.screen, color, slab, border_radius=4)
+
+        if st.guessed_player is not None:
+            draw_doodle_text(
+                self.screen,
+                self.L.PLAYING_BUZZ_LOCK.format(n=st.guessed_player),
+                self.theme.body_font,
+                ACCENT_YELLOW,
+                (w // 2, by + 28),
+                anchor="center",
+                shadow=False,
+            )
+
         draw_doodle_text(self.screen, self.L.PLAYING_NOTE,
                           self.theme.small_font, INK_DIM,
-                          (w // 2, h // 2 + 140), anchor="center", shadow=False)
+                          (w // 2, h - 80), anchor="center", shadow=False)
+
+
+PRESENT_PORT = 8090
+
+
+def _start_present_server_background() -> None:
+    """Run the PRESENT song-library web UI on the LAN (see PRESENT.md)."""
+
+    def _serve() -> None:
+        try:
+            from present.server import run as present_run
+        except ImportError as exc:
+            print(
+                f"PRESENT web UI not started (missing dependency): {exc}",
+                file=sys.stderr,
+            )
+            return
+        try:
+            present_run(host="0.0.0.0", port=PRESENT_PORT, debug=False)
+        except OSError as exc:
+            print(
+                f"PRESENT web UI not started (port {PRESENT_PORT}): {exc}",
+                file=sys.stderr,
+            )
+        except Exception as exc:  # noqa: BLE001 — keep pygame running
+            print(f"PRESENT web UI stopped: {exc}", file=sys.stderr)
+
+    threading.Thread(
+        target=_serve,
+        name="present-serve",
+        daemon=True,
+    ).start()
+    print(
+        f"PRESENT library: http://127.0.0.1:{PRESENT_PORT}/ "
+        f"(LAN: http://<this-PC-ip>:{PRESENT_PORT}/)",
+        flush=True,
+    )
 
 
 def main() -> int:
     try:
+        _start_present_server_background()
         App().run()
     except KeyboardInterrupt:
         pass

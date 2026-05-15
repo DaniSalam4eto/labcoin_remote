@@ -1,0 +1,24 @@
+{
+  "id": "Toto_Slavi_-_Izkushenie",
+  "artist": "Toto, Slavi",
+  "title": "Izkushenie",
+  "origin": "global",
+  "added_at": "2026-05-14T19:54:29Z",
+  "duration": 222.052426,
+  "youtube_id": "oX1gULkPxaQ",
+  "youtube_title": "ТоТо Н, Слави и Ку-Ку Бенд - Изкушение / ToTo H, Slavi & Ku-Ku Band - Izkushenie  OFFICIAL 4K VIDEO",
+  "youtube_url": "https://www.youtube.com/watch?v=oX1gULkPxaQ",
+  "chart_source": "manual-url",
+  "clip_positions": [
+    22.33133341843982,
+    83.5460826127885,
+    134.1101397132632,
+    178.02194019499754
+  ],
+  "clips": [
+    "clip_1.m4a",
+    "clip_2.m4a",
+    "clip_3.m4a",
+    "clip_4.m4a"
+  ]
+}
