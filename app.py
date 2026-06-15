@@ -231,6 +231,7 @@ class Screen(Enum):
     BAND_5GHZ = auto()
     OUT_OF_RANGE = auto()
     SEARCHING = auto()
+    WIFI_SETUP = auto()
     CONNECTED_OK = auto()
     BUTTON_CHECK = auto()
     MAIN_MENU = auto()
@@ -242,8 +243,11 @@ class Screen(Enum):
 # Screens that are part of getting/keeping the link (vs. actually in the game).
 CONNECTION_SCREENS = frozenset({
     Screen.SETUP, Screen.LOADING, Screen.BAND_5GHZ, Screen.OUT_OF_RANGE,
-    Screen.SEARCHING, Screen.CONNECTED_OK, Screen.BUTTON_CHECK,
+    Screen.SEARCHING, Screen.WIFI_SETUP, Screen.CONNECTED_OK, Screen.BUTTON_CHECK,
 })
+
+# If we haven't connected within this long, pop up the manual Wi-Fi entry form.
+WIFI_PROMPT_AFTER_S = 30.0
 GAME_SCREENS = frozenset({
     Screen.MAIN_MENU, Screen.ROUND_SELECT, Screen.COUNTDOWN, Screen.PLAYING,
 })
@@ -295,6 +299,11 @@ class AppState:
     notice_text: str = ""           # transient top-center toast (autostart, etc.)
     notice_until: float = 0.0       # show the toast until this monotonic time
     search_attempts: int = 0        # failed reconnect attempts reported by the worker
+    connect_started_at: float = 0.0  # when the current connect attempt sequence began
+    wifi_prompt_shown: bool = False  # the manual Wi-Fi form was auto-shown already
+    wifi_input_ssid: str = ""        # manual Wi-Fi entry: network name field
+    wifi_input_password: str = ""    # manual Wi-Fi entry: password field
+    wifi_input_field: int = 0        # which field is focused (0 = SSID, 1 = password)
 
 
 class App:
@@ -355,6 +364,9 @@ class App:
         self._wait_action_rects: list[tuple[pygame.Rect, str]] = []
         # Click target for the podium's back-to-menu button.
         self.winner_back_button_rect = pygame.Rect(0, 0, 0, 0)
+        # Click targets for the manual Wi-Fi form (two fields + connect button).
+        self.wifi_field_rects = [pygame.Rect(0, 0, 0, 0), pygame.Rect(0, 0, 0, 0)]
+        self.wifi_connect_rect = pygame.Rect(0, 0, 0, 0)
         self._menu_logo_cache: tuple[tuple[int, int], pygame.Surface] | None = None
 
         # Persistent prefs (run-at-startup, first-setup-done).
@@ -537,7 +549,7 @@ class App:
                 # only fires when the Wi-Fi band is fine, so it also clears a
                 # stale 5 GHz warning once the user has switched bands.
                 if self._is_connection_screen() and st.screen not in (
-                        Screen.SEARCHING, Screen.SETUP):
+                        Screen.SEARCHING, Screen.SETUP, Screen.WIFI_SETUP):
                     self.set_screen(Screen.LOADING, status=self.L.STATUS_OOR)
             else:
                 st.last_error = ev.text
@@ -552,9 +564,10 @@ class App:
                 st.search_attempts = int(ev.text)
             except (ValueError, TypeError):
                 st.search_attempts = 0
-            # Show the dedicated search screen, but never interrupt a live game
-            # or the manual Wi-Fi-band warning.
-            if self._is_connection_screen() and st.screen != Screen.BAND_5GHZ:
+            # Show the dedicated search screen, but never interrupt a live game,
+            # the Wi-Fi-band warning, or the manual Wi-Fi entry form.
+            if self._is_connection_screen() and st.screen not in (
+                    Screen.BAND_5GHZ, Screen.WIFI_SETUP):
                 self.set_screen(Screen.SEARCHING, status=self.L.STATUS_SEARCHING)
         elif ev.kind == "connected":
             self._on_connected(ev)
@@ -605,8 +618,10 @@ class App:
         if self._is_game_screen():
             return
         # On a connection screen, reflect "reconnecting" (the worker keeps
-        # trying; the search screen takes over after enough failures).
-        if st.screen not in (Screen.SETUP, Screen.BAND_5GHZ, Screen.SEARCHING):
+        # trying; the search screen takes over after enough failures). Leave the
+        # manual Wi-Fi form up if the user is typing into it.
+        if st.screen not in (Screen.SETUP, Screen.BAND_5GHZ, Screen.SEARCHING,
+                             Screen.WIFI_SETUP):
             self.set_screen(Screen.LOADING, status=self.L.STATUS_DISCONNECTED)
 
     def _on_button(self, ev: Event) -> None:
@@ -1051,8 +1066,11 @@ class App:
                     self._refresh_fountain_areas()
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
-                        if self.state.fullscreen:
-                            running = False
+                        # On the Wi-Fi form, Esc just backs out (don't quit the
+                        # app over a mistyped password).
+                        if self.state.screen == Screen.WIFI_SETUP:
+                            self.set_screen(Screen.LOADING,
+                                            status=self.L.STATUS_RETRYING)
                         else:
                             running = False
                     elif event.key == pygame.K_F11:
@@ -1079,6 +1097,11 @@ class App:
         # Ctrl+O toggles run-at-startup, anywhere.
         if event.key == pygame.K_o and (pygame.key.get_mods() & pygame.KMOD_CTRL):
             self._toggle_autostart()
+            return
+        # On the manual Wi-Fi form, every key is text entry (handled first so it
+        # never triggers game/lang shortcuts).
+        if st.screen == Screen.WIFI_SETUP:
+            self._wifi_setup_keydown(event)
             return
         if self._try_keyboard_lang_toggle(event):
             return
@@ -1133,6 +1156,15 @@ class App:
 
     def _handle_click(self, pos: tuple[int, int]) -> None:
         st = self.state
+        if st.screen == Screen.WIFI_SETUP:
+            if self.wifi_connect_rect.collidepoint(pos):
+                self._submit_wifi_form()
+                return
+            for i, rect in enumerate(self.wifi_field_rects):
+                if rect.collidepoint(pos):
+                    st.wifi_input_field = i
+                    return
+            return
         if st.screen == Screen.SETUP and self.start_button_rect.collidepoint(pos):
             self._start_connection()
         elif st.screen in (Screen.BAND_5GHZ, Screen.OUT_OF_RANGE) and \
@@ -1213,6 +1245,8 @@ class App:
         st.status_text = self.L.PLAYING_HINT_WAIT_CONFIRM
 
     def _start_connection(self) -> None:
+        self.state.connect_started_at = time.monotonic()
+        self.state.wifi_prompt_shown = False
         self.set_screen(Screen.LOADING,
                         status=self.L.STATUS_SEARCHING_BLE)
         self.connector.start()
@@ -1229,8 +1263,68 @@ class App:
 
     # ------------------------------------------------------------------ update
 
+    def _maybe_prompt_wifi(self) -> None:
+        """If we still haven't connected after WIFI_PROMPT_AFTER_S, pop up the
+        manual Wi-Fi entry form (the saved password often can't be read on a
+        headless Pi, so let the user type it in)."""
+        st = self.state
+        if st.wifi_prompt_shown:
+            return
+        if st.screen not in (Screen.LOADING, Screen.SEARCHING, Screen.OUT_OF_RANGE):
+            return
+        if time.monotonic() - st.connect_started_at < WIFI_PROMPT_AFTER_S:
+            return
+        st.wifi_input_ssid = str(self.config.get("wifi_ssid") or "")
+        st.wifi_input_password = str(self.config.get("wifi_password") or "")
+        st.wifi_input_field = 0
+        st.wifi_prompt_shown = True
+        self.set_screen(Screen.WIFI_SETUP, status="")
+
+    def _submit_wifi_form(self) -> None:
+        """Use the typed Wi-Fi creds: hand them to the worker (sent to the remote
+        over Bluetooth), persist them, and retry the connection now."""
+        st = self.state
+        ssid = st.wifi_input_ssid.strip()
+        if not ssid:
+            self._flash_notice(self.L.WIFI_NEED_SSID)
+            return
+        password = st.wifi_input_password
+        self.connector.set_wifi_credentials(ssid, password)
+        self.config["wifi_ssid"] = ssid
+        self.config["wifi_password"] = password
+        app_config.save(self.config)
+        # Give the new creds a fresh window; re-show the form if they're wrong.
+        st.connect_started_at = time.monotonic()
+        st.wifi_prompt_shown = False
+        self._flash_notice(self.L.WIFI_SAVED)
+        self.set_screen(Screen.LOADING, status=self.L.STATUS_RETRYING)
+        self.connector.request_immediate_reconnect()
+
+    def _wifi_setup_keydown(self, event: pygame.event.Event) -> None:
+        st = self.state
+        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            self._submit_wifi_form()
+        elif event.key == pygame.K_TAB:
+            st.wifi_input_field = 1 - st.wifi_input_field
+        elif event.key in (pygame.K_UP, pygame.K_DOWN):
+            st.wifi_input_field = 1 - st.wifi_input_field
+        elif event.key == pygame.K_BACKSPACE:
+            if st.wifi_input_field == 0:
+                st.wifi_input_ssid = st.wifi_input_ssid[:-1]
+            else:
+                st.wifi_input_password = st.wifi_input_password[:-1]
+        else:
+            ch = event.unicode
+            # Printable, no field/line separators (they'd break the BLE payload).
+            if ch and ch.isprintable() and ch not in "|\r\n":
+                if st.wifi_input_field == 0 and len(st.wifi_input_ssid) < 64:
+                    st.wifi_input_ssid += ch
+                elif st.wifi_input_field == 1 and len(st.wifi_input_password) < 64:
+                    st.wifi_input_password += ch
+
     def _update(self, dt: float, t: float) -> None:
         st = self.state
+        self._maybe_prompt_wifi()
         if st.screen == Screen.COUNTDOWN:
             elapsed = time.monotonic() - st.countdown_start
             # Mirror the on-screen number onto the remote OLED as it ticks. Use
@@ -1276,6 +1370,7 @@ class App:
             Screen.BAND_5GHZ: self._draw_band_5ghz,
             Screen.OUT_OF_RANGE: self._draw_out_of_range,
             Screen.SEARCHING: self._draw_searching,
+            Screen.WIFI_SETUP: self._draw_wifi_setup,
             Screen.CONNECTED_OK: self._draw_connected_ok,
             Screen.BUTTON_CHECK: self._draw_button_check,
             Screen.MAIN_MENU: self._draw_main_menu,
@@ -1302,7 +1397,7 @@ class App:
         st = self.state.screen
         if st == Screen.SETUP:
             return "offline", self.L.STATUS_PILL_OFFLINE
-        if st == Screen.LOADING:
+        if st in (Screen.LOADING, Screen.WIFI_SETUP):
             return "connecting", self.L.STATUS_PILL_CONNECTING
         if st == Screen.SEARCHING:
             return "connecting", self.L.STATUS_PILL_SEARCHING
@@ -1429,6 +1524,70 @@ class App:
             y = panel.bottom - 64
             alpha = 80 + int(155 * t01)
             blit_smooth_circle(self.screen, (x, y), r, INK, alpha=alpha)
+
+    def _draw_wifi_setup(self, t: float) -> None:
+        """Manual Wi-Fi entry: two typed fields + a Connect button. Shown when
+        auto-detect couldn't read the password (common on a headless Pi)."""
+        from doodle import _rounded_mask, _rounded_stroke
+        st = self.state
+        panel = self._draw_card_shell(
+            width=640, height=420, dy=-6,
+            status=self._connection_status(), status_t=t,
+        )
+        draw_doodle_text(self.screen, self.L.WIFI_SETUP_TITLE,
+                          self.theme.title_font, INK,
+                          (panel.centerx, panel.top + 64), anchor="center",
+                          shadow=False)
+        draw_doodle_text(self.screen, self.L.WIFI_SETUP_BODY,
+                          self.theme.small_font, INK_SOFT,
+                          (panel.centerx, panel.top + 104), anchor="center",
+                          shadow=False)
+
+        field_w = panel.width - 96
+        field_h = 50
+        fx = panel.centerx - field_w // 2
+        labels = [self.L.WIFI_SETUP_SSID, self.L.WIFI_SETUP_PASSWORD]
+        values = [st.wifi_input_ssid, st.wifi_input_password]
+        ys = [panel.top + 150, panel.top + 232]
+        blink = (int(t * 2) % 2 == 0)
+        for i in range(2):
+            label_y = ys[i]
+            draw_doodle_text(self.screen, labels[i], self.theme.small_font,
+                              INK_SOFT, (fx, label_y), anchor="topleft",
+                              shadow=False)
+            rect = pygame.Rect(fx, label_y + 26, field_w, field_h)
+            self.wifi_field_rects[i] = rect
+            active = (st.wifi_input_field == i)
+            radius = 12
+            mask = _rounded_mask(rect.size, radius)
+            wash = pygame.Surface(rect.size, pygame.SRCALPHA)
+            wash.fill((28, 32, 44, 150))
+            wash.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+            self.screen.blit(wash, rect.topleft)
+            stroke = (*STATUS_GREEN, 235) if active else (255, 255, 255, 70)
+            self.screen.blit(
+                _rounded_stroke(rect.size, radius, stroke, 2 if active else 1),
+                rect.topleft)
+            shown = values[i]
+            cursor = "|" if (active and blink) else ""
+            txt = self.theme.body_font.render(shown + cursor, True, INK)
+            # Left-align, clipped to the field.
+            clip = self.screen.get_clip()
+            self.screen.set_clip(rect.inflate(-20, 0))
+            self.screen.blit(txt, (rect.left + 14,
+                                    rect.centery - txt.get_height() // 2))
+            self.screen.set_clip(clip)
+
+        # Connect button.
+        btn = pygame.Rect(0, 0, 240, 50)
+        btn.center = (panel.centerx, panel.bottom - 52)
+        self.wifi_connect_rect = btn
+        draw_pill_button(self.screen, btn, self.L.WIFI_SETUP_CONNECT, self.theme,
+                          primary=True, hovered=self._hover(btn))
+        draw_doodle_text(self.screen, self.L.WIFI_SETUP_HINT,
+                          self.theme.small_font, INK_DIM,
+                          (panel.centerx, panel.bottom - 16), anchor="center",
+                          shadow=False)
 
     def _draw_warning_screen(self, title: str, lines: list[str], t: float,
                               accent: tuple[int, int, int]) -> None:

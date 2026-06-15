@@ -139,6 +139,16 @@ AUTOSTART_ON = "Start at boot: ON"
 AUTOSTART_OFF = "Start at boot: OFF"
 AUTOSTART_UNAVAILABLE = "Start-at-boot needs Windows"
 
+# Manual Wi-Fi entry (shown if it can't connect within 30 s).
+WIFI_SETUP_TITLE = "Enter your Wi-Fi"
+WIFI_SETUP_BODY = "Couldn't read it automatically. Type your 2.4 GHz network."
+WIFI_SETUP_SSID = "Wi-Fi name"
+WIFI_SETUP_PASSWORD = "Password"
+WIFI_SETUP_CONNECT = "CONNECT"
+WIFI_SETUP_HINT = "Tab switches fields - Enter connects - Esc cancels"
+WIFI_NEED_SSID = "Enter a Wi-Fi name first"
+WIFI_SAVED = "Wi-Fi saved - connecting..."
+
 FB_FALLBACK_BUTTON = "Button {n}"
 
 # Matches esp32_connector button indices; English labels for the GUI.

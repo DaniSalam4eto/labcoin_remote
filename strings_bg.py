@@ -141,6 +141,16 @@ AUTOSTART_ON = "Автостарт: ВКЛ"
 AUTOSTART_OFF = "Автостарт: ИЗКЛ"
 AUTOSTART_UNAVAILABLE = "Автостартът изисква Windows"
 
+# Manual Wi-Fi entry (shown if it can't connect within 30 s).
+WIFI_SETUP_TITLE = "Въведете Wi-Fi"
+WIFI_SETUP_BODY = "Не може да се прочете автоматично. Въведете 2,4 GHz мрежата."
+WIFI_SETUP_SSID = "Име на Wi-Fi"
+WIFI_SETUP_PASSWORD = "Парола"
+WIFI_SETUP_CONNECT = "СВЪРЗВАНЕ"
+WIFI_SETUP_HINT = "Tab сменя полето - Enter свързва - Esc отказва"
+WIFI_NEED_SSID = "Първо въведете име на Wi-Fi"
+WIFI_SAVED = "Wi-Fi запазен - свързване..."
+
 FB_FALLBACK_BUTTON = "Бутон {n}"
 
 # Same indices as esp32_connector; Bulgarian labels for the GUI.
