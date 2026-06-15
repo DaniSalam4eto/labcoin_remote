@@ -5,6 +5,8 @@
   //   if the display is powered from the same board 3V3.):
   //   SDA -> GPIO 21
   //   SCL -> GPIO 22
+  //   Volume potentiometer wiper -> GPIO 34 (ADC1, input-only). Outer legs to
+  //     3V3 and GND (never 5V). Turn toward the 3V3 leg = louder. See POT_PIN.
   //   Buttons (mapped after GPIO discovery on your board; one physical switch was
   //   on GPIO35 which is input-only / no internal pull-up — not included here).
   //   SW1..SW12 -> GPIO 27, 2, 5, 17, 16, 4, 32, 18, 26, 25, 33, 13
@@ -23,12 +25,23 @@
   //      the WiFi characteristic.
   //   2) ESP32 connects to Wi-Fi and notifies "IP:<addr>:<port>" back on the
   //      same characteristic (or "ERR:wifi" if the connection failed).
-  //   3) Python opens a TCP socket to <addr>:<port> and sends lines of the
-  //      form "SINGER|SONG\n".
-  //   4) ESP32 shows the singer icon + names for 10 s, then returns to the
-  //      idle VR Varna logo.
-  //   5) Whenever any mapped switch is pressed, the ESP32 sends a line
-  //      "BTN:<n>\n" (n = 1..BUTTON_COUNT) back to Python over the same TCP socket.
+  //   3) Python opens a TCP socket to <addr>:<port>. Messages PC -> ESP are
+  //      newline-terminated, '|'-separated, and dispatched by their first field:
+  //        SONG|artist|title|holdms  - show the now-playing panel. holdms>0
+  //            draws a countdown of that length; the panel then PERSISTS until
+  //            the host sends another command, so it stays up exactly as long as
+  //            the real clip plays. holdms=0 shows it with no countdown bar.
+  //        RANK|label:score|label:score|label:score  - up to three rows, shown
+  //            as a Top-3 leaderboard (pushed after every round).
+  //        CD|<text>  - one big centered glyph (the 3-2-1-GO! pre-round
+  //            countdown, mirrored from the PC).
+  //        IDLE  - return to the idle VR Varna logo.
+  //        RESET (or REBOOT)  - software reboot, same as the physical RESET
+  //            button. The ESP acks "RESETTING" then restarts.
+  //        artist|title  - legacy 2-field song; auto-hides after 10 s.
+  //   4) Messages ESP -> Python over the same socket:
+  //        BTN:<n>  - mapped switch n (1..BUTTON_COUNT) was pressed.
+  //        VOL:<0..100>  - the GPIO34 volume knob moved (see POT_PIN).
   //
   // Local UI extras:
   //   - Holding SW1 (button 1) for 2 s on the idle screen swaps the display for
@@ -114,6 +127,18 @@
   bool tcpActive = false;
   bool wifiReady = false;
   String connectedSSID = "";
+
+  // --- Volume potentiometer --------------------------------------------------
+  // Wiper -> GPIO34 (ADC1_CH6). GPIO34 is INPUT-ONLY and lives on ADC1, so it
+  // keeps reading while Wi-Fi is on (ADC2 pins return garbage once the radio is
+  // up) and it physically can't drive a load — exactly what a volume knob wants.
+  // Wire the outer legs to 3V3 and GND; never 5V (the ADC clamps near 3.3V).
+  #define POT_PIN 34
+  const int POT_ADC_MAX = 4095;            // 12-bit full scale
+  const unsigned long POT_POLL_MS = 60UL;  // ~16 Hz is plenty for a knob
+  unsigned long lastPotPollAt = 0;
+  int potFiltered = -1;                    // EMA of the raw ADC (-1 = unset)
+  int lastSentVolume = -1;                 // last 0..100 value pushed to the PC
 
   // --- Music note geometry (left half, centered at NOTE_CX / NOTE_CY) --------
 
@@ -233,11 +258,21 @@
   }
 
   // --- Right-side state machine ---------------------------------------------
-  enum RightState { RS_IDLE, RS_SONG, RS_QR };
+  enum RightState { RS_IDLE, RS_SONG, RS_QR, RS_RANK, RS_COUNT };
   RightState rightState = RS_IDLE;
   String singerName = "";
   String songName   = "";
   unsigned long songShownAt = 0;
+  // Big centered countdown digit ("3"/"2"/"1"/"GO!"), mirrored from the PC.
+  String countdownText = "";
+  // A new SONG|... push stays on screen until the host changes it (so it lasts
+  // for the whole clip); only the legacy "artist|title" path auto-hides.
+  bool songAutoHide = false;
+  unsigned long songHoldMs = SONG_HOLD_MS;  // countdown length; 0 = no bar
+  // Top-3 leaderboard (RANK|label:score|...).
+  String rankLabel[3];
+  int    rankScore[3] = { -1, -1, -1 };
+  int    rankCount = 0;
 
   // --- QR menu --------------------------------------------------------------
   // SW1 must be held this long on the idle screen before the QR menu appears.
@@ -333,6 +368,102 @@
   }
 
   // --- TCP message handling --------------------------------------------------
+  // Parse one line from the PC. Dispatch is by the first '|'-separated field:
+  //   SONG|artist|title|holdms   now-playing; holdms>0 draws a countdown of that
+  //                              length, then the panel persists until the host
+  //                              changes it. holdms=0 = no bar.
+  //   RANK|label:score|...       up to three rows -> Top-3 leaderboard.
+  //   IDLE                       back to the idle logo.
+  //   artist|title               legacy song, auto-hides after SONG_HOLD_MS.
+  void processCommand(const String& line) {
+    int bar = line.indexOf('|');
+    String head = (bar < 0) ? line : line.substring(0, bar);
+    String rest = (bar < 0) ? String("") : line.substring(bar + 1);
+    String headUp = head;
+    headUp.toUpperCase();
+
+    if (headUp == "IDLE") {
+      rightState = RS_IDLE;
+      return;
+    }
+
+    if (headUp == "RESET" || headUp == "REBOOT") {
+      // Software reboot — same effect as the physical RESET / EN button.
+      Serial.println("Reset requested over network; restarting...");
+      if (tcpActive && tcpClient.connected()) {
+        tcpClient.print("RESETTING\n");
+        tcpClient.flush();
+      }
+      delay(120);            // let the ack flush before the radios drop
+      ESP.restart();
+      return;                // not reached
+    }
+
+    if (headUp == "CD") {
+      // CD|<text> — big centered countdown digit mirrored from the PC.
+      int b = rest.indexOf('|');
+      countdownText = (b < 0) ? rest : rest.substring(0, b);
+      rightState = RS_COUNT;
+      return;
+    }
+
+    if (headUp == "SONG") {
+      int b1 = rest.indexOf('|');
+      String artist = (b1 < 0) ? rest : rest.substring(0, b1);
+      String tail   = (b1 < 0) ? String("") : rest.substring(b1 + 1);
+      int b2 = tail.indexOf('|');
+      String title  = (b2 < 0) ? tail : tail.substring(0, b2);
+      String holdS  = (b2 < 0) ? String("") : tail.substring(b2 + 1);
+      singerName = artist;
+      songName   = title;
+      songHoldMs = (unsigned long)(holdS.length() ? holdS.toInt() : 0);
+      songAutoHide = false;
+      rightState = RS_SONG;
+      songShownAt = millis();
+      Serial.printf("SONG: %s - %s (hold %lu ms)\n",
+                    singerName.c_str(), songName.c_str(), songHoldMs);
+      return;
+    }
+
+    if (headUp == "RANK") {
+      rankCount = 0;
+      String r = rest;
+      while (rankCount < 3 && r.length() > 0) {
+        int b = r.indexOf('|');
+        String tok = (b < 0) ? r : r.substring(0, b);
+        r = (b < 0) ? String("") : r.substring(b + 1);
+        tok.trim();
+        if (tok.length() == 0) continue;
+        int colon = tok.lastIndexOf(':');
+        if (colon < 0) {
+          rankLabel[rankCount] = tok;
+          rankScore[rankCount] = -1;
+        } else {
+          rankLabel[rankCount] = tok.substring(0, colon);
+          rankScore[rankCount] = tok.substring(colon + 1).toInt();
+        }
+        rankCount++;
+      }
+      if (rankCount > 0) {
+        rightState = RS_RANK;
+        songShownAt = millis();
+      }
+      return;
+    }
+
+    // Legacy fallback: bare "artist|title" (auto-hides after SONG_HOLD_MS).
+    if (bar >= 0) {
+      singerName = head;
+      songName   = rest;
+      songHoldMs = SONG_HOLD_MS;
+      songAutoHide = true;
+      rightState = RS_SONG;
+      songShownAt = millis();
+      Serial.printf("Now showing: %s - %s\n",
+                    singerName.c_str(), songName.c_str());
+    }
+  }
+
   void handleTCP() {
     if (!wifiReady) return;
     if (!tcpActive) {
@@ -340,6 +471,8 @@
       if (c) {
         tcpClient = c;
         tcpActive = true;
+        // Re-send the current knob position to the freshly connected host.
+        lastSentVolume = -1;
         Serial.println("TCP client connected");
       }
     }
@@ -347,6 +480,9 @@
       if (!tcpClient.connected()) {
         tcpClient.stop();
         tcpActive = false;
+        // Host went away: fall back to the idle logo instead of freezing on
+        // whatever song / leaderboard was last shown.
+        rightState = RS_IDLE;
         Serial.println("TCP client disconnected");
         return;
       }
@@ -354,13 +490,7 @@
         String line = tcpClient.readStringUntil('\n');
         line.trim();
         if (line.length() == 0) continue;
-        int bar = line.indexOf('|');
-        if (bar < 0) continue;
-        singerName = line.substring(0, bar);
-        songName   = line.substring(bar + 1);
-        rightState  = RS_SONG;
-        songShownAt = millis();
-        Serial.printf("Now showing: %s - %s\n", singerName.c_str(), songName.c_str());
+        processCommand(line);
       }
     }
   }
@@ -406,6 +536,44 @@
           tcpClient.print(msg);
         }
       }
+    }
+  }
+
+  // --- Volume potentiometer --------------------------------------------------
+  void sendVolume(int vol) {
+    if (tcpActive && tcpClient.connected()) {
+      String msg = String("VOL:") + String(vol) + "\n";
+      tcpClient.print(msg);
+    }
+  }
+
+  void pollPotentiometer() {
+    unsigned long now = millis();
+    if (now - lastPotPollAt < POT_POLL_MS) return;
+    lastPotPollAt = now;
+
+    int raw = analogRead(POT_PIN);
+    if (potFiltered < 0) potFiltered = raw;
+    else potFiltered += (raw - potFiltered) / 4;   // light EMA smoothing
+
+    // Map to 0..100 with guard bands so the knob reliably reaches a true 0 and
+    // a true 100 despite ADC nonlinearity / saturation near the rails.
+    const int DEAD_LO = POT_ADC_MAX * 2 / 100;
+    const int DEAD_HI = POT_ADC_MAX * 5 / 100;
+    int span = POT_ADC_MAX - DEAD_LO - DEAD_HI;
+    if (span < 1) span = 1;
+    int v = (int)((long)(potFiltered - DEAD_LO) * 100 / span);
+    if (v < 0) v = 0;
+    if (v > 100) v = 100;
+
+    // Emit only on a meaningful change (or when newly pinned to a rail) so the
+    // link isn't flooded with jitter.
+    bool atRail = (v == 0 || v == 100);
+    if (lastSentVolume < 0 ||
+        abs(v - lastSentVolume) >= 2 ||
+        (atRail && v != lastSentVolume)) {
+      lastSentVolume = v;
+      sendVolume(v);
     }
   }
 
@@ -520,14 +688,89 @@
     drawTextWindow(singerName, 0, 26, SCREEN_WIDTH, millis());
     drawTextWindow(songName,   0, 40, SCREEN_WIDTH, millis() + 400);
 
-    // Countdown bar centered along the bottom, full width minus margins.
-    unsigned long elapsed = millis() - songShownAt;
-    if (elapsed > SONG_HOLD_MS) elapsed = SONG_HOLD_MS;
-    const int BAR_W_MAX = SCREEN_WIDTH - 8;
-    int barW = BAR_W_MAX - (int)((long)BAR_W_MAX * elapsed / SONG_HOLD_MS);
-    if (barW < 0) barW = 0;
-    display.drawRect(4, 58, BAR_W_MAX, 4, SSD1306_WHITE);
-    display.fillRect(4, 58, barW, 4, SSD1306_WHITE);
+    // Countdown bar centered along the bottom, full width minus margins. Driven
+    // by songHoldMs (the real clip length); skipped entirely when 0. The bar
+    // empties as the clip plays but the panel itself stays until the host
+    // pushes the next command.
+    if (songHoldMs > 0) {
+      unsigned long elapsed = millis() - songShownAt;
+      if (elapsed > songHoldMs) elapsed = songHoldMs;
+      const int BAR_W_MAX = SCREEN_WIDTH - 8;
+      int barW = BAR_W_MAX - (int)((long)BAR_W_MAX * elapsed / songHoldMs);
+      if (barW < 0) barW = 0;
+      display.drawRect(4, 58, BAR_W_MAX, 4, SSD1306_WHITE);
+      display.fillRect(4, 58, barW, 4, SSD1306_WHITE);
+    }
+  }
+
+  // --- Drawing: the Top-3 leaderboard ----------------------------------------
+  // Three rows: a rank badge (filled disc for #1, outline for #2/#3), the player
+  // label on the left, and the score right-aligned. Populated by RANK|... and
+  // shown after every round.
+  void drawRankPanel() {
+    display.setTextSize(1);
+    display.setTextWrap(false);
+    display.setTextColor(SSD1306_WHITE);
+    const char* hdr = "TOP 3";
+    const int hw = (int)strlen(hdr) * 6;
+    display.setCursor((SCREEN_WIDTH - hw) / 2, 0);
+    display.print(hdr);
+    display.drawFastHLine(0, 10, SCREEN_WIDTH, SSD1306_WHITE);
+
+    int n = rankCount;
+    if (n > 3) n = 3;
+    const int top = 14;
+    const int rowH = (SCREEN_HEIGHT - top) / 3;   // ~16 px per row
+    for (int i = 0; i < n; i++) {
+      const int cy = top + i * rowH + rowH / 2;
+      const int badgeR = 6;
+      const int bx = badgeR + 2;
+
+      // Rank badge: #1 filled (number knocked out), #2/#3 outlined.
+      if (i == 0) {
+        display.fillCircle(bx, cy, badgeR, SSD1306_WHITE);
+        display.setTextColor(SSD1306_BLACK);
+      } else {
+        display.drawCircle(bx, cy, badgeR, SSD1306_WHITE);
+        display.setTextColor(SSD1306_WHITE);
+      }
+      display.setCursor(bx - 2, cy - 3);
+      display.print(i + 1);
+      display.setTextColor(SSD1306_WHITE);
+
+      // Score right-aligned; label left-aligned after the badge.
+      String score = (rankScore[i] >= 0) ? String(rankScore[i]) : String("");
+      const int scoreW = score.length() * 6;
+      const int scoreX = SCREEN_WIDTH - scoreW - 2;
+      const int labelX = bx + badgeR + 5;
+      display.setCursor(labelX, cy - 3);
+      display.print(rankLabel[i]);
+      if (score.length()) {
+        display.setCursor(scoreX, cy - 3);
+        display.print(score);
+      }
+    }
+  }
+
+  // --- Drawing: the big countdown digit --------------------------------------
+  // Mirrors the PC's 3-2-1-GO! countdown as one large centered glyph. The text
+  // size is chosen to fill the screen, shrinking if it would overflow.
+  void drawCountdown() {
+    if (countdownText.length() == 0) return;
+    display.setTextWrap(false);
+    display.setTextColor(SSD1306_WHITE);
+    const int len = countdownText.length();
+    int size = (len <= 1) ? 7 : (len <= 3 ? 4 : 2);   // default 6x8 font cell
+    int tw = len * 6 * size;
+    int th = 8 * size;
+    while (size > 1 && (tw > SCREEN_WIDTH || th > SCREEN_HEIGHT)) {
+      size--;
+      tw = len * 6 * size;
+      th = 8 * size;
+    }
+    display.setTextSize(size);
+    display.setCursor((SCREEN_WIDTH - tw) / 2, (SCREEN_HEIGHT - th) / 2);
+    display.print(countdownText);
   }
 
   // Standard WiFi symbol: stacked 90° arcs above a small bottom dot. The dot
@@ -716,6 +959,11 @@
 
     initGeometry();
     setupButtons();
+
+    // Volume knob on ADC1 (GPIO34). 12-bit reads, 11 dB attenuation for the
+    // full ~0..3.3 V swing of a pot wired across 3V3 / GND.
+    analogReadResolution(12);
+    analogSetPinAttenuation(POT_PIN, ADC_11db);
   }
 
   void loop() {
@@ -736,13 +984,17 @@
       handleTCP();
     }
     pollButtons();
+    pollPotentiometer();
 
     if (!displayReady) {
       delay(100);
       return;
     }
 
-    if (rightState == RS_SONG && millis() - songShownAt > SONG_HOLD_MS) {
+    // Only legacy 2-field songs auto-hide; SONG|... pushes persist until the
+    // host changes the screen, so they last as long as the clip actually plays.
+    if (rightState == RS_SONG && songAutoHide &&
+        millis() - songShownAt > songHoldMs) {
       rightState = RS_IDLE;
     }
 
@@ -767,6 +1019,12 @@
         break;
       case RS_SONG:
         drawSongPanel();
+        break;
+      case RS_RANK:
+        drawRankPanel();
+        break;
+      case RS_COUNT:
+        drawCountdown();
         break;
       case RS_QR:
         drawQRMenu();

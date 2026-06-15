@@ -1,0 +1,2 @@
+# Optional: build a Windows folder bundle (see LabcoinRemote.spec).
+pyinstaller>=6.3

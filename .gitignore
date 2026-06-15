@@ -6,4 +6,5 @@ venv/
 build/
 dist/
 *.spec
+!LabcoinRemote.spec
 .vscode/

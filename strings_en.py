@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import re
 
-WINDOW_TITLE = "Labcoin — music remote"
+WINDOW_TITLE = "Labcoin - music remote"
 
 STATUS_DEFAULT = "Press START to look for the remote."
 STATUS_SEARCHING_BLE = "Searching for the remote over BLE..."
@@ -15,7 +15,7 @@ STATUS_MAIN_MENU = "Press the number of players on the remote."
 STATUS_ROUNDS = "How many rounds? Press a number."
 
 STATUS_5GHZ = "You are on a 5 GHz network."
-STATUS_OOR = "The remote is out of range — move it closer."
+STATUS_OOR = "The remote is out of range - move it closer."
 STATUS_LOST_LINK = "Lost link: {err}"
 STATUS_CONNECTED = "Remote connected ({addr})."
 STATUS_DISCONNECTED = "Remote disconnected. Retrying every 15 seconds..."
@@ -24,6 +24,15 @@ TITLE_WORDMARK = "LABCOIN"
 TITLE_APP = "Music remote"
 SETUP_LINE1 = "Make sure this computer is on the same"
 SETUP_LINE2 = "2.4 GHz Wi‑Fi network as the remote."
+
+# Short status-pill labels shown on every screen.
+STATUS_PILL_OFFLINE    = "Remote not connected"
+STATUS_PILL_CONNECTING = "Connecting…"
+STATUS_PILL_CONNECTED  = "Remote connected"
+STATUS_PILL_PROBLEM    = "Link problem"
+ACTION_HINT_START      = "Start"
+ACTION_HINT_RELOAD     = "Reload"
+ACTION_HINT_CONTINUE   = "Continue"
 
 BTN_START = "START"
 BTN_RELOAD = "RELOAD"
@@ -39,7 +48,7 @@ WARN_WIFI_ON_SSID = 'You are on "{ssid}".'
 WARN_WIFI_ON_5GHZ = "You are on 5 GHz Wi‑Fi."
 
 OOR_TITLE = "Remote out of range"
-OOR_BODY = "Move it closer — retrying every 15 seconds."
+OOR_BODY = "Move it closer - retrying every 15 seconds."
 
 CONNECTED_TITLE = "Remote connected!"
 CONNECTED_HINT = (
@@ -47,57 +56,88 @@ CONNECTED_HINT = (
 )
 
 BUTTON_CHECK_TITLE = "Button check"
-BUTTON_CHECK_DONE = "All set — continue when you are ready."
+BUTTON_CHECK_DONE = "All set - continue when you are ready."
 BUTTON_CHECK_KEYS = (
     "Press any remote button, Enter / Space, or tap CONTINUE."
 )
-BUTTON_CHECK_PRESS = "Next: {label} — any remote button advances."
+BUTTON_CHECK_PRESS = "Next: {label} - any remote button advances."
 
 MAIN_MENU_FALLBACK = "LABCOIN MUSIC"
 MAIN_MENU_LINE1 = "PRESS THE NUMBER OF PLAYERS"
 MAIN_MENU_LINE2 = (
-    "from 1 to 10 — on the remote or the keyboard."
+    "from 1 to 10 - on the remote or the keyboard."
 )
 
 ROUND_TITLE = "How many rounds?"
 ROUND_HINT = "Press a number on the remote (or keyboard)."
 
 PLAYING_TITLE = "Game on"
-PLAYING_STATUS = "Listen — the title is on the remote display."
+PLAYING_STATUS = "Listen - the title is on the remote display."
 PLAYING_NOTE = (
     "Numpad = buzz (stops clip)   •   Check advances rounds & scoreboard   •   Hold both checks ~2 s = mis-buzz   •   Backspace = menu"
 )
 PLAYING_HINT_WAIT_REVEAL = (
-    "Clip 1 done — press Check on the remote for another clip from this song."
+    "Clip 1 done - press Check on the remote for another clip from this song."
 )
-PLAYING_HINT_CLIP2 = "Second clip — names stay on the remote only."
+PLAYING_HINT_CLIP2 = "Second clip - names stay on the remote only."
 PLAYING_HINT_WAIT_CONFIRM = (
-    "Paused for a buzz-in. Check = 1 pt · Double check = 2 pts (then podium — Check again for next round). "
-    "Hold Check + Double check together ~2 s to cancel — music continues, no points."
+    "Paused for a buzz-in. Check = 1 pt · Double check = 2 pts (then podium - Check again for next round). "
+    "Hold Check + Double check together ~2 s to cancel - music continues, no points."
 )
 PLAYING_HINT_WAIT_ADVANCE = (
-    "Press Check for this scoreboard — press Check again when the big bars finish "
+    "Press Check for this scoreboard - press Check again when the big bars finish "
     "to start the next round."
 )
-PLAYING_HINT_GUESS = "While a clip plays: numpad 1–{n} buzzes in (stops playback — see status line)."
+PLAYING_HINT_GUESS = "While a clip plays: numpad 1-{n} buzzes in (stops playback - see status line)."
 PLAYING_BUZZ_LOCK = "Buzz-in: player {n}"
 PLAYING_ROUND = "Round {n} of {total}"
 PLAYING_NOW = "Now playing"
 PLAYING_NO_LIBRARY = (
     "No songs found. Run `python -m present init` to build the library."
 )
-PLAYING_AUDIO_ERROR = "Audio engine unavailable — install ffmpeg and retry."
-PLAYING_REMOTE_OFFLINE = "Remote offline — clip is playing on this PC only."
-PLAYING_FINISHED = "All rounds played — press Check to return to the menu."
+PLAYING_AUDIO_ERROR = "Audio engine unavailable - install ffmpeg and retry."
+PLAYING_REMOTE_OFFLINE = "Remote offline - clip is playing on this PC only."
+PLAYING_FINISHED = "All rounds played - press Check to return to the menu."
 
 LEADERBOARD_TITLE = "Leaderboard"
 LEADERBOARD_PLAYER = "Player {n}"
 PLAYING_LEADERBOARD_HINT = (
     "Press Check or Enter for the next round (continues automatically after a few seconds)."
 )
+PLAYING_NEXT_IN = "Next round in {n}s"
+
+# Rich wait-phase panel under the waveform.
+WAIT_REVEAL_HEADING   = "Clip 1 done - what's next?"
+WAIT_REVEAL_REPLAY    = "Play second clip"
+WAIT_REVEAL_BUZZ      = "Or numpad 1-{n} to buzz in with a guess"
+WAIT_REVEAL_BUZZ_HINT = "Or pick the player who's buzzing in"
+
+WAIT_CONFIRM_HEADING = "Player {n} buzzed in"
+WAIT_CONFIRM_ONE     = "+ 1 point"
+WAIT_CONFIRM_TWO     = "+ 2 points"
+WAIT_CONFIRM_CANCEL  = "Cancel - keep playing"
+WAIT_CONFIRM_PICK    = "Wrong player? Pick who actually answered:"
+
+WAIT_ADVANCE_HEADING = "Round over"
+WAIT_ADVANCE_NEXT    = "Open scoreboard"
+
+# End-of-game podium screen.
+WINNER_TITLE       = "Winner!"
+WINNER_SUBTITLE    = "Player {n} wins with {s} points"
+WINNER_BACK_BUTTON = "Back to menu"
 
 TILE_OK = "OK"
 COUNTDOWN_GO = "GO!"
+VOLUME_HUD = "Volume {n}%"
+
+# Search mode (after many failed reconnects) + run-at-startup toggle.
+SEARCHING_TITLE = "Searching for remote"
+SEARCHING_BODY = "It went offline - the app keeps trying on its own."
+STATUS_SEARCHING = "Searching for the remote - reconnecting automatically..."
+STATUS_PILL_SEARCHING = "Searching..."
+AUTOSTART_ON = "Start at boot: ON"
+AUTOSTART_OFF = "Start at boot: OFF"
+AUTOSTART_UNAVAILABLE = "Start-at-boot needs Windows"
 
 FB_FALLBACK_BUTTON = "Button {n}"
 
@@ -120,8 +160,8 @@ BUTTON_NAMES = {
 
 def players_phrase(n: int) -> str:
     if n == 1:
-        return "1 player — let's play!"
-    return f"{n} players — let's play!"
+        return "1 player - let's play!"
+    return f"{n} players - let's play!"
 
 
 def rounds_count_bg(p: int, r: int) -> str:

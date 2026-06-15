@@ -23,46 +23,61 @@ from typing import Optional
 
 import pygame
 
+from bundle_paths import app_base_dir
+
 # --------------------------------------------------------------------------
-# Color palette — vivid, playful, and explicitly *not* beige/skin-tone.
-# All gradients are vertical *background* gradients only; per the design
-# brief the controller and other purple surfaces are solid (no purple
-# gradients anywhere).
+# Color palette — neutral console aesthetic (PS5 / Switch family).
+# Deep near-black background; frosted-glass surfaces over it; a small set of
+# vivid accents reserved for status, focus, and category color.
 # --------------------------------------------------------------------------
 
-# Background pair (deep midnight, very subtle vertical gradient).
-BG_TOP        = (16, 18, 38)       # #101226
-BG_BOTTOM     = (8, 9, 22)         # #080916
+# Background pair (deep near-black, barely-there vertical fall-off).
+BG_TOP        = (14, 16, 22)       # #0E1016
+BG_BOTTOM     = (4,  5,  10)       # #04050A
 
-# Panel / surface tones.
-PANEL_FILL    = (28, 30, 58)       # #1C1E3A
-PANEL_HI      = (40, 44, 80)       # #282C50
+# Frosted-glass surfaces (RGBA — alpha matters).
+GLASS_TINT       = (22, 26, 36, 168)   # default frosted card tint
+GLASS_TINT_SOFT  = (28, 32, 44, 130)   # lighter tier (chips / pills)
+GLASS_TINT_DEEP  = (16, 18, 28, 210)   # heavier tier (overlays)
+GLASS_STROKE     = (255, 255, 255, 28) # 1-px inner stroke for cards
+GLASS_STROKE_HI  = (255, 255, 255, 52) # for hovered / focused
+
+# Solid panel tones used by tile widgets that don't sit on a card.
+PANEL_FILL    = (28, 32, 42)       # #1C202A
+PANEL_HI      = (42, 48, 62)       # #2A303E
 PANEL_OUTLINE = (255, 255, 255)
-PANEL_SHADOW  = (4, 4, 14)
+PANEL_SHADOW  = (4, 5, 10)
 
 # Text.
-INK           = (245, 245, 255)    # near-white
-INK_SOFT      = (180, 184, 220)
-INK_DIM       = (130, 134, 175)
+INK           = (245, 247, 252)
+INK_SOFT      = (188, 196, 214)
+INK_DIM       = (132, 140, 160)
 
-# Controller.
-PURPLE        = (158, 96, 255)     # #9E60FF — solid; no gradient ever
-PURPLE_DEEP   = (108, 60, 200)     # used only as a thin shading band, *not* a fill gradient
+# Status colors (used by the status pill + connection state).
+STATUS_GREEN  = (62, 207, 142)     # connected
+STATUS_AMBER  = (255, 184, 80)     # connecting / waiting
+STATUS_RED    = (255, 95,  95)     # error / off
+STATUS_BLUE   = (87, 182, 255)     # info
+
+# Vibrant accents — kept (and lightly retuned) for back-compat with all the
+# screens that still tag content with category color.
+ACCENT_PINK   = (255, 119, 176)
+ACCENT_CYAN   = (95,  214, 220)
+ACCENT_YELLOW = (255, 210, 90)
+ACCENT_GREEN  = STATUS_GREEN
+ACCENT_GREEN_D = (60, 170, 110)
+ACCENT_BLUE   = STATUS_BLUE
+ACCENT_RED    = STATUS_RED
+ACCENT_ORANGE = (255, 168, 88)
+PURPLE        = (170, 122, 255)
+PURPLE_DEEP   = (118, 78,  210)
+ACCENT_PURPLE = PURPLE
+
+# Controller cartoon (legacy, only drawn if explicitly requested).
 ANTENNA_GRAY  = (200, 204, 215)
 ANTENNA_DARK  = (132, 138, 156)
 
-# Vibrant accents (used for buttons, headlines, notes).
-ACCENT_PINK   = (255, 99, 176)     # #FF63B0
-ACCENT_CYAN   = (77, 224, 214)     # #4DE0D6
-ACCENT_YELLOW = (255, 217, 61)     # #FFD93D
-ACCENT_GREEN  = (91, 212, 119)     # #5BD477
-ACCENT_GREEN_D = (60, 170, 90)
-ACCENT_BLUE   = (87, 182, 255)     # #57B6FF
-ACCENT_RED    = (255, 96, 109)     # #FF606D
-ACCENT_ORANGE = (255, 159, 67)     # #FF9F43
-ACCENT_PURPLE = PURPLE             # alias
-
-# Legacy aliases kept so older imports don't break (just point at the new palette).
+# Legacy aliases kept so older imports don't break.
 BEIGE_BG       = BG_TOP
 BEIGE_BG_DARK  = BG_BOTTOM
 BEIGE_PANEL    = PANEL_FILL
@@ -82,8 +97,7 @@ NOTE_COLORS = [
 #     Bulgarian so Cyrillic stays on a deliberate display cut.
 # --------------------------------------------------------------------------
 
-_DOODLE_DIR = Path(__file__).resolve().parent
-_PACKAGE_FONTS = _DOODLE_DIR / "fonts"
+_PACKAGE_FONTS = app_base_dir() / "fonts"
 _BUNDLED_COMFORTAA = _PACKAGE_FONTS / "Comfortaa-Variable.ttf"
 
 
@@ -421,19 +435,22 @@ class NoteFountain:
 
     def _spawn(self, initial: bool = False) -> _FloatingNote:
         base = random.choice(self.note_pngs)
-        target_h = random.randint(34, 64)
+        target_h = random.randint(22, 44)
         img = scale_to_height(base, target_h)
+        # Soft ambient layer: knock back alpha so notes don't compete with cards.
+        img = img.copy()
+        img.set_alpha(80)
         return _FloatingNote(
             image=img,
             x=self._random_x(),
             y=(random.uniform(self.area.top, self.area.bottom)
                if initial else self.area.bottom + random.uniform(20, 200)),
-            speed=random.uniform(28, 60),
+            speed=random.uniform(20, 44),
             sway_amp=random.uniform(8, 22),
             sway_freq=random.uniform(0.6, 1.6),
             sway_phase=random.uniform(0, math.tau),
-            spin=random.uniform(-12, 12),
-            spin_speed=random.uniform(-25, 25),
+            spin=random.uniform(-8, 8),
+            spin_speed=random.uniform(-18, 18),
         )
 
     def update(self, dt: float, t: float) -> None:
@@ -482,37 +499,275 @@ def _shade(color: tuple[int, int, int], factor: float) -> tuple[int, int, int]:
     )
 
 
+def _stamp_rounded_shadow(surface: pygame.Surface, rect: pygame.Rect, *,
+                            radius: int, alpha: int = 120, blur: int = 24,
+                            offset_y: int = 14) -> None:
+    """Blit a cached anti-aliased soft drop shadow under ``rect``."""
+    sh = _drop_shadow(rect.size, radius, alpha=alpha, blur=blur)
+    pad = blur * 2
+    surface.blit(sh, (rect.left - pad, rect.top - pad + offset_y))
+
+
+def draw_glass_card(surface: pygame.Surface, rect: pygame.Rect, *,
+                     radius: int = 30,
+                     tint: tuple[int, int, int, int] = GLASS_TINT,
+                     stroke: tuple[int, int, int, int] = GLASS_STROKE,
+                     shadow: bool = True,
+                     spotlight: bool = True) -> None:
+    """Frosted-glass rounded card with anti-aliased corners.
+
+    Steps:
+      1. Optional radial white spotlight under the card so it "pops" off the bg.
+      2. Soft anti-aliased drop shadow (cached).
+      3. Re-blit a crop of the pre-blurred background, clipped to a smooth
+         PIL-built rounded mask — true frosted-glass crop.
+      4. Translucent tint, clipped to the same mask.
+      5. Anti-aliased rounded outline.
+    """
+    safe = rect.clip(surface.get_rect())
+    if safe.width <= 0 or safe.height <= 0:
+        return
+
+    # Card-behind spotlight removed at user request — the drop shadow gives
+    # the card enough depth without a visible white halo on dark backgrounds.
+    del spotlight
+
+    if shadow:
+        _stamp_rounded_shadow(surface, rect, radius=radius,
+                                alpha=130, blur=26, offset_y=20)
+
+    mask = _rounded_mask(rect.size, radius)
+
+    # Blurred bg crop, clipped to the rounded shape.
+    blurred = _blurred_background(surface.get_size())
+    glass = pygame.Surface(rect.size, pygame.SRCALPHA)
+    glass.blit(blurred, (-rect.left, -rect.top))
+    glass.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+    surface.blit(glass, rect.topleft)
+
+    # Tint overlay, also clipped to the rounded shape.
+    overlay = pygame.Surface(rect.size, pygame.SRCALPHA)
+    overlay.fill(tint)
+    overlay.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+    surface.blit(overlay, rect.topleft)
+
+    # Crisp anti-aliased outline.
+    surface.blit(_rounded_stroke(rect.size, radius, stroke, width=1),
+                  rect.topleft)
+
+
+def draw_pill_button(surface: pygame.Surface, rect: pygame.Rect,
+                      label: str, theme: Theme, *,
+                      primary: bool = True, hovered: bool = False,
+                      font: Optional[pygame.font.Font] = None) -> None:
+    """Glossy translucent glass capsule.
+
+    No solid white fill, no icon badges — just a dark glass pill with a soft
+    inner top highlight and a hairline white stroke. Smaller, body-font-sized
+    label by default so 4–8-character labels fit comfortably."""
+    del primary  # tint is the same either way; only the alpha differs slightly
+    radius = rect.height // 2
+    font = font or theme.body_font
+
+    _stamp_rounded_shadow(surface, rect, radius=radius,
+                            alpha=140 if hovered else 110,
+                            blur=22, offset_y=14)
+
+    mask = _rounded_mask(rect.size, radius)
+
+    # 1) Frosted glass: blurred bg crop clipped to the capsule.
+    blurred = _blurred_background(surface.get_size())
+    glass = pygame.Surface(rect.size, pygame.SRCALPHA)
+    glass.blit(blurred, (-rect.left, -rect.top))
+    glass.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+    surface.blit(glass, rect.topleft)
+
+    # 2) Light translucent wash — much more transparent than before so the
+    # blurred background reads through. Alpha lifts a little on hover.
+    wash = pygame.Surface(rect.size, pygame.SRCALPHA)
+    wash_alpha = 90 if hovered else 60
+    wash.fill((26, 30, 44, wash_alpha))
+    wash.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+    surface.blit(wash, rect.topleft)
+
+    # 3) Inner top highlight — slightly brighter gloss top, fades away.
+    highlight_h = max(8, rect.height // 2)
+    hi_layer = pygame.Surface(rect.size, pygame.SRCALPHA)
+    for i in range(highlight_h):
+        a = int(54 * (1.0 - i / max(1, highlight_h)))
+        if a <= 0:
+            continue
+        pygame.draw.rect(hi_layer, (255, 255, 255, a),
+                         pygame.Rect(0, i, rect.width, 1))
+    hi_layer.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+    surface.blit(hi_layer, rect.topleft)
+
+    # 4) Hairline outline — brighter when hovered.
+    stroke = (255, 255, 255, 140 if hovered else 95)
+    surface.blit(_rounded_stroke(rect.size, radius, stroke, width=1),
+                  rect.topleft)
+
+    # 5) Label.
+    text_color = INK
+    lbl = font.render(label, True, text_color)
+    surface.blit(lbl, lbl.get_rect(center=rect.center))
+
+
 def draw_chunky_button(surface: pygame.Surface, rect: pygame.Rect, label: str,
                        theme: Theme,
-                       fill: tuple[int, int, int] = ACCENT_CYAN,
+                       fill: tuple[int, int, int] = (245, 245, 245),
                        text_color: tuple[int, int, int] = (15, 15, 30),
                        hovered: bool = False,
                        depth: int = 7) -> None:
-    """3D-feeling chunky button — a darker base sits behind a flat top face.
+    """Back-compat shim — funnels into the new glass pill button."""
+    del depth, fill, text_color
+    draw_pill_button(surface, rect, label, theme,
+                      primary=True, hovered=hovered)
 
-    The dark base shows through at the bottom edge to suggest thickness, like
-    the tile boxes from the button-check screen.
-    """
-    rect = rect.copy()
-    if hovered:
-        rect = rect.inflate(6, 6)
-        depth = max(3, depth - 2)
-    base_color = _shade(fill, 0.55)
-    base = rect.move(0, depth)
-    pygame.draw.rect(surface, base_color, base, border_radius=18)
-    top = rect
-    pygame.draw.rect(surface, fill, top, border_radius=18)
-    # Glassy top highlight.
-    hl = pygame.Rect(top.left + 6, top.top + 4, top.width - 12, max(4, top.height // 4))
-    hl_surf = pygame.Surface(hl.size, pygame.SRCALPHA)
-    pygame.draw.rect(hl_surf, (255, 255, 255, 65),
-                     pygame.Rect(0, 0, hl.width, hl.height),
-                     border_radius=14)
-    surface.blit(hl_surf, hl.topleft)
-    # Outline.
-    pygame.draw.rect(surface, _shade(fill, 0.4), top, width=2, border_radius=18)
-    txt = theme.title_font.render(label, True, text_color)
-    surface.blit(txt, txt.get_rect(center=top.center))
+
+def draw_status_pill(surface: pygame.Surface, anchor_point: tuple[int, int],
+                      label: str, theme: Theme, *,
+                      status: str = "offline",
+                      t: float = 0.0,
+                      anchor: str = "center") -> pygame.Rect:
+    """Small glassy capsule with a colored status dot.
+
+    ``anchor`` controls how ``anchor_point`` is interpreted — any of the
+    pygame Rect anchor attributes (``center``, ``midright``, ``topright`` …).
+    Pass ``"midright"`` to clamp the pill to the right edge of the screen so
+    long labels (e.g. Bulgarian) don't clip off-screen.
+
+    Status keys: ``"connected" | "connecting" | "offline" | "error" | "info"``.
+    The dot pulses gently when ``connecting``."""
+    color = {
+        "connected": STATUS_GREEN,
+        "connecting": STATUS_AMBER,
+        "offline": INK_DIM,
+        "error": STATUS_RED,
+        "info": STATUS_BLUE,
+    }.get(status, INK_DIM)
+    dot_r = 6
+    pad_x = 14
+    pad_y = 8
+    font = theme.small_font
+    lbl = font.render(label, True, INK)
+    w = lbl.get_width() + pad_x * 2 + dot_r * 2 + 10
+    h = lbl.get_height() + pad_y * 2
+    rect = pygame.Rect(0, 0, w, h)
+    try:
+        setattr(rect, anchor, anchor_point)
+    except (AttributeError, TypeError):
+        rect.center = anchor_point
+    radius = h // 2
+
+    mask = _rounded_mask(rect.size, radius)
+
+    blurred = _blurred_background(surface.get_size())
+    crop = pygame.Surface(rect.size, pygame.SRCALPHA)
+    crop.blit(blurred, (-rect.left, -rect.top))
+    crop.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+    surface.blit(crop, rect.topleft)
+
+    wash = pygame.Surface(rect.size, pygame.SRCALPHA)
+    wash.fill((22, 26, 36, 130))
+    wash.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+    surface.blit(wash, rect.topleft)
+
+    surface.blit(_rounded_stroke(rect.size, radius, (255, 255, 255, 60), 1),
+                  rect.topleft)
+
+    cx_dot = rect.left + pad_x + dot_r
+    cy_dot = rect.centery
+    if status == "connecting":
+        pulse = 0.5 + 0.5 * math.sin(t * 3.4)
+        halo_r = int(dot_r + 3 + 3 * pulse)
+        blit_soft_halo(surface, (cx_dot, cy_dot), halo_r, color,
+                        alpha=int(80 * (0.4 + 0.6 * pulse)), blur=5)
+    # Flat anti-aliased dot — no fake gloss highlight.
+    blit_smooth_circle(surface, (cx_dot, cy_dot), dot_r, color)
+
+    surface.blit(lbl, (cx_dot + dot_r + 10,
+                       rect.centery - lbl.get_height() // 2))
+    return rect
+
+
+def draw_action_hint(surface: pygame.Surface, anchor_left: tuple[int, int],
+                      label: str, hint_letter: str, theme: Theme,
+                      *, color: tuple[int, int, int] = INK) -> pygame.Rect:
+    """Kept only for back-compat — newer screens render labels without the
+    'press X' badge entirely. Falls back to a plain label."""
+    del hint_letter
+    lbl = theme.title_font.render(label, True, color)
+    rect = lbl.get_rect(midleft=anchor_left)
+    surface.blit(lbl, rect)
+    return rect
+
+
+def draw_remote_icon(surface: pygame.Surface, center: tuple[int, int],
+                      *, scale: float = 1.0,
+                      accent: tuple[int, int, int] = STATUS_BLUE,
+                      pulse_t: float = 0.0,
+                      connected: bool = False) -> pygame.Rect:
+    """Minimalist glass controller silhouette with a 2×5 numpad."""
+    cx, cy = center
+    w = int(220 * scale)
+    h = int(150 * scale)
+    rect = pygame.Rect(0, 0, w, h)
+    rect.center = (cx, cy)
+    radius = int(26 * scale)
+
+    _stamp_rounded_shadow(surface, rect, radius=radius,
+                            alpha=120, blur=24, offset_y=14)
+    mask = _rounded_mask(rect.size, radius)
+
+    body_layer = pygame.Surface(rect.size, pygame.SRCALPHA)
+    body_layer.fill((52, 58, 74, 235))
+    body_layer.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+    surface.blit(body_layer, rect.topleft)
+
+    # Glossy top highlight (matches the buttons).
+    highlight_h = max(6, h // 3)
+    hi = pygame.Surface(rect.size, pygame.SRCALPHA)
+    for i in range(highlight_h):
+        a = int(28 * (1.0 - i / max(1, highlight_h)))
+        if a <= 0:
+            continue
+        pygame.draw.rect(hi, (255, 255, 255, a),
+                         pygame.Rect(0, i, rect.width, 1))
+    hi.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+    surface.blit(hi, rect.topleft)
+
+    surface.blit(_rounded_stroke(rect.size, radius, (255, 255, 255, 50), 1),
+                  rect.topleft)
+
+    # Status LED — anti-aliased dot, soft halo when connected.
+    led_cx = rect.centerx
+    led_cy = rect.top + int(16 * scale)
+    led_color = accent if connected else INK_DIM
+    if connected:
+        pulse = 0.5 + 0.5 * math.sin(pulse_t * 2.4)
+        halo_r = int(8 * scale + 3 * pulse)
+        blit_soft_halo(surface, (led_cx, led_cy), halo_r, led_color,
+                        alpha=int(95 * (0.4 + 0.6 * pulse)), blur=5)
+    blit_smooth_circle(surface, (led_cx, led_cy),
+                       max(2, int(4 * scale)), led_color)
+
+    # 2×5 numpad of soft dots — anti-aliased, with a slightly darker shadow.
+    rows, cols = 5, 2
+    pad_w = int(w * 0.32)
+    pad_h = int(h * 0.62)
+    pad_left = cx - pad_w // 2
+    pad_top = cy - pad_h // 2 + int(12 * scale)
+    dot_r = max(3, int(4.5 * scale))
+    for r in range(rows):
+        for c in range(cols):
+            x = pad_left + (pad_w // (cols - 1)) * c
+            y = pad_top + (pad_h // (rows - 1)) * r
+            blit_smooth_circle(surface, (x, y), dot_r + 2,
+                                (16, 18, 24), alpha=220)
+            blit_smooth_circle(surface, (x, y), dot_r,
+                                (235, 238, 246), alpha=210)
+    return rect
 
 
 # Back-compat name used elsewhere in the codebase.
@@ -541,50 +796,337 @@ def draw_doodle_text(surface: pygame.Surface, text: str, font: pygame.font.Font,
     return rect
 
 
-def draw_background(surface: pygame.Surface) -> None:
-    """Deep midnight gradient with a subtle starfield dot pattern.
+_BG_PLAIN_CACHE: dict[tuple[int, int], pygame.Surface] = {}
+_BG_BLURRED_CACHE: dict[tuple[int, int], pygame.Surface] = {}
+_GLOW_CACHE: dict[tuple[int, int, int, int], pygame.Surface] = {}
+_ROUNDED_MASK_CACHE: dict[tuple[int, int, int], pygame.Surface] = {}
+_ROUNDED_STROKE_CACHE: dict[tuple[int, int, int, int, int, int, int], pygame.Surface] = {}
+_DROP_SHADOW_CACHE: dict[tuple[int, int, int, int, int], pygame.Surface] = {}
+_SMOOTH_CIRCLE_CACHE: dict[tuple[int, int, int, int, int], pygame.Surface] = {}
+_SOFT_HALO_CACHE: dict[tuple[int, int, int, int, int], pygame.Surface] = {}
 
-    Background is the only place a vertical gradient is allowed; it's a
-    midnight-navy fade, not purple.
+
+def smooth_circle(radius: int,
+                   color: tuple[int, int, int],
+                   *, alpha: int = 255) -> pygame.Surface:
+    """Anti-aliased filled circle. The shape is drawn in Pillow at 2×
+    resolution and downsampled with LANCZOS — no visible stair-step pixels
+    on the edge. Cached per (radius, color, alpha)."""
+    if radius < 1:
+        radius = 1
+    key = (radius, color[0], color[1], color[2], alpha)
+    cached = _SMOOTH_CIRCLE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    pad = 2  # leave a thin transparent border so AA pixels aren't clipped
+    size = (radius * 2 + pad * 2, radius * 2 + pad * 2)
+    try:
+        from PIL import Image, ImageDraw  # type: ignore
+    except Exception:
+        surf = pygame.Surface(size, pygame.SRCALPHA)
+        pygame.draw.circle(surf, (*color, alpha),
+                           (size[0] // 2, size[1] // 2), radius)
+        _SMOOTH_CIRCLE_CACHE[key] = surf
+        return surf
+    ss = 2
+    big = Image.new("RGBA", (size[0] * ss, size[1] * ss), (0, 0, 0, 0))
+    cx = size[0] * ss // 2
+    cy = size[1] * ss // 2
+    r = radius * ss
+    ImageDraw.Draw(big).ellipse(
+        (cx - r, cy - r, cx + r, cy + r),
+        fill=(*color, alpha),
+    )
+    small = big.resize(size, Image.LANCZOS)
+    surf = pygame.image.frombytes(small.tobytes(), size, "RGBA").convert_alpha()
+    _SMOOTH_CIRCLE_CACHE[key] = surf
+    return surf
+
+
+def blit_smooth_circle(surface: pygame.Surface, center: tuple[int, int],
+                        radius: int, color: tuple[int, int, int],
+                        *, alpha: int = 255) -> None:
+    """Center-anchored convenience wrapper around :func:`smooth_circle`."""
+    img = smooth_circle(radius, color, alpha=alpha)
+    surface.blit(img, (center[0] - img.get_width() // 2,
+                        center[1] - img.get_height() // 2))
+
+
+def soft_halo(radius: int, color: tuple[int, int, int],
+               *, alpha: int = 90, blur: int = 4) -> pygame.Surface:
+    """Soft Gaussian-blurred halo for status-dot glows and LED pulses."""
+    if radius < 1:
+        radius = 1
+    key = (radius, color[0], color[1], color[2], (alpha << 8) | blur)
+    cached = _SOFT_HALO_CACHE.get(key)
+    if cached is not None:
+        return cached
+    pad = max(6, blur * 2 + 2)
+    size = (radius * 2 + pad * 2, radius * 2 + pad * 2)
+    try:
+        from PIL import Image, ImageDraw, ImageFilter  # type: ignore
+    except Exception:
+        surf = pygame.Surface(size, pygame.SRCALPHA)
+        pygame.draw.circle(surf, (*color, alpha),
+                           (size[0] // 2, size[1] // 2), radius)
+        _SOFT_HALO_CACHE[key] = surf
+        return surf
+    img = Image.new("RGBA", size, (0, 0, 0, 0))
+    cx, cy = size[0] // 2, size[1] // 2
+    ImageDraw.Draw(img).ellipse(
+        (cx - radius, cy - radius, cx + radius, cy + radius),
+        fill=(*color, alpha),
+    )
+    img = img.filter(ImageFilter.GaussianBlur(radius=blur))
+    surf = pygame.image.frombytes(img.tobytes(), size, "RGBA").convert_alpha()
+    _SOFT_HALO_CACHE[key] = surf
+    return surf
+
+
+def blit_soft_halo(surface: pygame.Surface, center: tuple[int, int],
+                    radius: int, color: tuple[int, int, int],
+                    *, alpha: int = 90, blur: int = 4) -> None:
+    """Center-anchored wrapper around :func:`soft_halo`."""
+    img = soft_halo(radius, color, alpha=alpha, blur=blur)
+    surface.blit(img, (center[0] - img.get_width() // 2,
+                        center[1] - img.get_height() // 2))
+
+
+def _bake_background(size: tuple[int, int]) -> pygame.Surface:
+    """Render the cached, atmospheric background.
+
+    Two big diffuse color orbs (cool blue top-left, violet bottom-right) drift
+    over a deep neutral gradient. No stars, no music notes — just blurry color.
     """
-    w, h = surface.get_size()
-    top = BG_TOP
-    bot = BG_BOTTOM
+    cached = _BG_PLAIN_CACHE.get(size)
+    if cached is not None:
+        return cached
+    w, h = size
+    try:
+        from PIL import Image, ImageDraw, ImageFilter  # type: ignore
+    except Exception:
+        # Pillow missing — fall back to a plain pygame gradient.
+        surf = pygame.Surface(size).convert()
+        for y in range(h):
+            t = y / max(1, h - 1)
+            r = int(BG_TOP[0] + (BG_BOTTOM[0] - BG_TOP[0]) * t)
+            g = int(BG_TOP[1] + (BG_BOTTOM[1] - BG_TOP[1]) * t)
+            b = int(BG_TOP[2] + (BG_BOTTOM[2] - BG_TOP[2]) * t)
+            pygame.draw.line(surf, (r, g, b), (0, y), (w, y))
+        _BG_PLAIN_CACHE[size] = surf
+        return surf
+
+    # Step 1 — slate-grey vertical gradient via a 1-px-wide strip resized up.
+    strip = Image.new("RGB", (1, h))
     for y in range(h):
         t = y / max(1, h - 1)
-        r = int(top[0] + (bot[0] - top[0]) * t)
-        g = int(top[1] + (bot[1] - top[1]) * t)
-        b = int(top[2] + (bot[2] - top[2]) * t)
-        pygame.draw.line(surface, (r, g, b), (0, y), (w, y))
-    _draw_starfield(surface)
+        r = int(BG_TOP[0] + (BG_BOTTOM[0] - BG_TOP[0]) * t)
+        g = int(BG_TOP[1] + (BG_BOTTOM[1] - BG_TOP[1]) * t)
+        b = int(BG_TOP[2] + (BG_BOTTOM[2] - BG_TOP[2]) * t)
+        strip.putpixel((0, y), (r, g, b))
+    base = strip.resize((w, h), Image.BILINEAR)
+
+    # Step 2 — paint a few big soft-edged blobs on a black canvas, blur hard,
+    # then composite over the grey with a low alpha so it stays subtle.
+    orbs = Image.new("RGB", (w, h), (0, 0, 0))
+    od = ImageDraw.Draw(orbs)
+    # Cool blue blob biased to the top-left.
+    od.ellipse(
+        (int(-w * 0.20), int(-h * 0.30), int(w * 0.65), int(h * 0.65)),
+        fill=(48, 96, 188),
+    )
+    # Violet blob biased to the bottom-right.
+    od.ellipse(
+        (int(w * 0.40), int(h * 0.45), int(w * 1.25), int(h * 1.35)),
+        fill=(122, 60, 198),
+    )
+    # Warm wash mid-right.
+    od.ellipse(
+        (int(w * 0.55), int(-h * 0.10), int(w * 1.15), int(h * 0.55)),
+        fill=(72, 132, 188),
+    )
+    orbs = orbs.filter(ImageFilter.GaussianBlur(radius=max(100, min(w, h) // 4)))
+
+    blended = Image.blend(base, orbs, 0.35)
+
+    raw = blended.tobytes()
+    surf = pygame.image.frombytes(raw, size, "RGB").convert()
+    _BG_PLAIN_CACHE[size] = surf
+    return surf
 
 
-_STARFIELD_CACHE: dict[tuple[int, int], pygame.Surface] = {}
+def draw_background(surface: pygame.Surface) -> None:
+    """Atmospheric blurry-grey background with soft color orbs baked in."""
+    surface.blit(_bake_background(surface.get_size()), (0, 0))
 
 
-def _draw_starfield(surface: pygame.Surface) -> None:
-    w, h = surface.get_size()
-    key = (w, h)
-    cached = _STARFIELD_CACHE.get(key)
-    if cached is None:
-        rng = random.Random(7)
-        layer = pygame.Surface((w, h), pygame.SRCALPHA)
-        # Soft scattered dots — 0.6 per 1000 px² density.
-        count = max(40, (w * h) // 1700)
-        for _ in range(count):
-            x = rng.randint(0, w - 1)
-            y = rng.randint(0, h - 1)
-            r = rng.choice([1, 1, 1, 2, 2, 3])
-            a = rng.randint(40, 140)
-            color = rng.choice([
-                (255, 255, 255, a),
-                (180, 220, 255, a),
-                (220, 180, 255, a),
-            ])
-            pygame.draw.circle(layer, color, (x, y), r)
-        _STARFIELD_CACHE[key] = layer
-        cached = layer
-    surface.blit(cached, (0, 0))
+def _blurred_background(size: tuple[int, int]) -> pygame.Surface:
+    """Pre-blurred copy of the baked background, the 'frosted glass' source
+    re-blitted inside every glass card."""
+    cached = _BG_BLURRED_CACHE.get(size)
+    if cached is not None:
+        return cached
+    plain = _bake_background(size)
+    try:
+        from PIL import Image, ImageFilter, ImageEnhance  # type: ignore
+        raw = pygame.image.tobytes(plain, "RGB")
+        pil = Image.frombytes("RGB", size, raw)
+        pil = pil.filter(ImageFilter.GaussianBlur(radius=28))
+        pil = ImageEnhance.Brightness(pil).enhance(0.78)
+        blurred = pygame.image.frombytes(pil.tobytes(), size, "RGB").convert()
+    except Exception:
+        try:
+            small = pygame.transform.smoothscale(
+                plain, (max(8, size[0] // 18), max(8, size[1] // 18)),
+            )
+            blurred = pygame.transform.smoothscale(small, size).convert()
+        except Exception:
+            blurred = plain.copy()
+    _BG_BLURRED_CACHE[size] = blurred
+    return blurred
+
+
+def invalidate_background_cache() -> None:
+    """Called when the window resizes — clears every size-keyed cache."""
+    _BG_PLAIN_CACHE.clear()
+    _BG_BLURRED_CACHE.clear()
+    _GLOW_CACHE.clear()
+    # Mask / stroke / shadow caches are keyed by (w, h, radius...) so they
+    # survive a resize cleanly; only the per-window caches need a flush.
+
+
+# ----------------------------------------------------------------------------
+# Anti-aliased rounded-rect primitives.
+#
+# pygame's `border_radius` is fast but visibly stair-stepped at small sizes.
+# These helpers draw every rounded shape in Pillow at 2× resolution then
+# downsample with LANCZOS, then convert to a pygame surface — clean corners
+# regardless of size. Results are cached so each unique shape is built once.
+# ----------------------------------------------------------------------------
+
+_PIL_SUPERSAMPLE = 2
+
+
+def _rounded_mask(size: tuple[int, int], radius: int) -> pygame.Surface:
+    """White rounded-rect on a transparent background. Used as an alpha mask
+    via ``BLEND_RGBA_MIN`` to clip an arbitrary surface to a smooth shape."""
+    key = (size[0], size[1], radius)
+    cached = _ROUNDED_MASK_CACHE.get(key)
+    if cached is not None:
+        return cached
+    try:
+        from PIL import Image, ImageDraw  # type: ignore
+    except Exception:
+        # Fallback: pygame's stair-stepped corners — better than nothing.
+        surf = pygame.Surface(size, pygame.SRCALPHA)
+        pygame.draw.rect(surf, (255, 255, 255, 255),
+                         pygame.Rect(0, 0, size[0], size[1]),
+                         border_radius=radius)
+        _ROUNDED_MASK_CACHE[key] = surf
+        return surf
+    ss = _PIL_SUPERSAMPLE
+    big = Image.new("L", (size[0] * ss, size[1] * ss), 0)
+    ImageDraw.Draw(big).rounded_rectangle(
+        (0, 0, size[0] * ss - 1, size[1] * ss - 1),
+        radius=radius * ss, fill=255,
+    )
+    small = big.resize(size, Image.LANCZOS)
+    rgba = Image.new("RGBA", size, (255, 255, 255, 0))
+    rgba.putalpha(small)
+    surf = pygame.image.frombytes(rgba.tobytes(), size, "RGBA").convert_alpha()
+    _ROUNDED_MASK_CACHE[key] = surf
+    return surf
+
+
+def _rounded_stroke(size: tuple[int, int], radius: int,
+                     color: tuple[int, int, int, int],
+                     width: int = 1) -> pygame.Surface:
+    """Thin anti-aliased rounded-rect outline."""
+    key = (size[0], size[1], radius, color[0], color[1], color[2], color[3] * 256 + width)
+    cached = _ROUNDED_STROKE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    try:
+        from PIL import Image, ImageDraw  # type: ignore
+    except Exception:
+        surf = pygame.Surface(size, pygame.SRCALPHA)
+        pygame.draw.rect(surf, color[:3] + (color[3],),
+                         pygame.Rect(0, 0, size[0], size[1]),
+                         width=width, border_radius=radius)
+        _ROUNDED_STROKE_CACHE[key] = surf
+        return surf
+    ss = _PIL_SUPERSAMPLE
+    big = Image.new("RGBA", (size[0] * ss, size[1] * ss), (0, 0, 0, 0))
+    ImageDraw.Draw(big).rounded_rectangle(
+        (0, 0, size[0] * ss - 1, size[1] * ss - 1),
+        radius=radius * ss, outline=color, width=max(1, width * ss),
+    )
+    small = big.resize(size, Image.LANCZOS)
+    surf = pygame.image.frombytes(small.tobytes(), size, "RGBA").convert_alpha()
+    _ROUNDED_STROKE_CACHE[key] = surf
+    return surf
+
+
+def _drop_shadow(size: tuple[int, int], radius: int, *,
+                  alpha: int = 110, blur: int = 22) -> pygame.Surface:
+    """Soft drop shadow shaped like the rounded rect of ``size``. The returned
+    surface is bigger than ``size`` so the blur isn't clipped at the edges."""
+    key = (size[0], size[1], radius, alpha, blur)
+    cached = _DROP_SHADOW_CACHE.get(key)
+    if cached is not None:
+        return cached
+    pad = blur * 2
+    out_size = (size[0] + pad * 2, size[1] + pad * 2)
+    try:
+        from PIL import Image, ImageDraw, ImageFilter  # type: ignore
+    except Exception:
+        surf = pygame.Surface(out_size, pygame.SRCALPHA)
+        pygame.draw.rect(surf, (0, 0, 0, alpha),
+                         pygame.Rect(pad, pad, size[0], size[1]),
+                         border_radius=radius)
+        _DROP_SHADOW_CACHE[key] = surf
+        return surf
+    ss = _PIL_SUPERSAMPLE
+    big = Image.new("RGBA", (out_size[0] * ss, out_size[1] * ss), (0, 0, 0, 0))
+    ImageDraw.Draw(big).rounded_rectangle(
+        (pad * ss, pad * ss,
+         (pad + size[0]) * ss - 1, (pad + size[1]) * ss - 1),
+        radius=radius * ss, fill=(0, 0, 0, alpha),
+    )
+    big = big.filter(ImageFilter.GaussianBlur(radius=blur * ss))
+    small = big.resize(out_size, Image.LANCZOS)
+    surf = pygame.image.frombytes(small.tobytes(), out_size, "RGBA").convert_alpha()
+    _DROP_SHADOW_CACHE[key] = surf
+    return surf
+
+
+def _radial_glow(size: tuple[int, int],
+                  color: tuple[int, int, int],
+                  alpha: int = 110) -> pygame.Surface:
+    """Soft round white-ish glow used as a 'spotlight' behind glass cards.
+    Cached per (size, color, alpha) so each card variant builds once."""
+    key = (size[0], size[1], (color[0] << 16) | (color[1] << 8) | color[2], alpha)
+    cached = _GLOW_CACHE.get(key)
+    if cached is not None:
+        return cached
+    try:
+        from PIL import Image, ImageDraw, ImageFilter  # type: ignore
+    except Exception:
+        surf = pygame.Surface(size, pygame.SRCALPHA)
+        pygame.draw.ellipse(surf, (*color, alpha),
+                            pygame.Rect(0, 0, size[0], size[1]))
+        _GLOW_CACHE[key] = surf
+        return surf
+    img = Image.new("RGBA", size, (0, 0, 0, 0))
+    ImageDraw.Draw(img).ellipse(
+        (int(size[0] * 0.18), int(size[1] * 0.18),
+         int(size[0] * 0.82), int(size[1] * 0.82)),
+        fill=(*color, alpha),
+    )
+    img = img.filter(ImageFilter.GaussianBlur(radius=max(28, min(size) // 6)))
+    surf = pygame.image.frombytes(img.tobytes(), size, "RGBA").convert_alpha()
+    _GLOW_CACHE[key] = surf
+    return surf
 
 
 # --------------------------------------------------------------------------

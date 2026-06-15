@@ -27,17 +27,23 @@ import pygame
 import doodle
 from doodle import (
     ACCENT_BLUE, ACCENT_CYAN, ACCENT_GREEN, ACCENT_PINK,
-    ACCENT_RED, ACCENT_YELLOW, INK, INK_DIM, INK_SOFT,
-    NoteFountain, PANEL_HI, PURPLE, Theme,
-    build_note_palette, draw_background, draw_chunky_button,
-    draw_crisp_label, draw_doodle_text,
-    draw_remote_placeholder,
+    ACCENT_RED, ACCENT_YELLOW, GLASS_TINT, GLASS_TINT_DEEP,
+    GLASS_TINT_SOFT, INK, INK_DIM, INK_SOFT,
+    NoteFountain, PANEL_HI, PURPLE, STATUS_AMBER, STATUS_BLUE,
+    STATUS_GREEN, STATUS_RED, Theme,
+    build_note_palette, draw_action_hint, draw_background,
+    draw_chunky_button, draw_crisp_label, draw_doodle_text,
+    draw_glass_card, draw_pill_button,
+    draw_remote_placeholder, draw_status_pill,
+    invalidate_background_cache,
     load_image_alpha, make_main_menu_hint_fonts, scale_menu_logo,
     title_font_file,
 )
 from esp32_connector import Esp32Connector, Event, NUMPAD_BUTTONS
 import strings_bg
 import strings_en
+import app_config
+import autostart
 from game_audio import (
     ClipPlayer,
     LibraryEmpty,
@@ -46,8 +52,83 @@ from game_audio import (
     pick_same_song_other_clip,
 )
 
-ROOT = Path(__file__).parent
+from bundle_paths import app_base_dir
+
+ROOT = app_base_dir()
 LOGOS = ROOT / "logos"
+
+
+def _make_vr_varna_icon(size: int) -> Optional[pygame.Surface]:
+    """Return the VR Varna window icon as a pygame surface.
+
+    Loads ``logos/vr_varna.png`` if present; otherwise renders a clean
+    programmatic mark (rounded dark badge with "VR" big + "VARNA" small in
+    white) via Pillow at 2× and downsamples for sharp edges. The user can
+    drop a real asset at ``logos/vr_varna.png`` to override it."""
+    for name in ("vr_varna.png", "vrvarna.png", "VRVarna.png"):
+        candidate = LOGOS / name
+        if candidate.is_file():
+            try:
+                return pygame.image.load(str(candidate)).convert_alpha()
+            except Exception:
+                break
+    try:
+        from PIL import Image, ImageDraw, ImageFont  # type: ignore
+    except Exception:
+        return None
+    ss = 2
+    W = size * ss
+    img = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    radius = int(W * 0.22)
+    draw.rounded_rectangle(
+        (0, 0, W - 1, W - 1),
+        radius=radius,
+        fill=(16, 20, 30, 255),
+    )
+    # Tasteful thin white inner stroke so the badge has an edge.
+    draw.rounded_rectangle(
+        (1, 1, W - 2, W - 2),
+        radius=radius,
+        outline=(255, 255, 255, 90),
+        width=max(1, ss),
+    )
+    # Try a clean sans-serif from Windows; fall back to PIL default.
+    def _ttf(*names: str, px: int) -> Optional["ImageFont.FreeTypeFont"]:
+        for n in names:
+            try:
+                return ImageFont.truetype(n, px)
+            except Exception:
+                continue
+        return None
+    big_font = _ttf("segoeuib.ttf", "seguisb.ttf", "arialbd.ttf",
+                    "DejaVuSans-Bold.ttf", px=int(W * 0.42)) \
+        or ImageFont.load_default()
+    small_font = _ttf("segoeui.ttf", "calibri.ttf", "arial.ttf",
+                      "DejaVuSans.ttf", px=int(W * 0.16)) \
+        or ImageFont.load_default()
+    # Big "VR" centered slightly above middle.
+    vr_w, vr_h = draw.textbbox((0, 0), "VR", font=big_font)[2:]
+    draw.text(
+        ((W - vr_w) / 2, int(W * 0.16)),
+        "VR",
+        fill=(245, 247, 252, 255),
+        font=big_font,
+    )
+    # Small "VARNA" beneath.
+    var_w, var_h = draw.textbbox((0, 0), "VARNA", font=small_font)[2:]
+    draw.text(
+        ((W - var_w) / 2, int(W * 0.66)),
+        "VARNA",
+        fill=(170, 196, 230, 255),
+        font=small_font,
+    )
+    img = img.resize((size, size), Image.LANCZOS)
+    try:
+        return pygame.image.frombytes(img.tobytes(), (size, size), "RGBA").convert_alpha()
+    except Exception:
+        return None
+
 
 WINDOW_SIZE = (980, 640)
 # Borderless window (no title bar). Keep RESIZABLE so edges can still resize on Windows.
@@ -110,7 +191,12 @@ DUAL_CHECK_HOLD_NEED_S = 2.00
 # Full-screen ranking after each round; host can skip early with Check / Enter.
 LEADERBOARD_ANIM_S = 1.15
 LEADERBOARD_ROW_STAGGER_S = 0.09
-LEADERBOARD_AUTO_ADVANCE_S = 14.0
+LEADERBOARD_AUTO_ADVANCE_S = 8.0
+# After the second clip with nobody buzzing, the "round over" screen flows into
+# the leaderboard on its own (host can still press Check to skip the wait).
+WAIT_ADVANCE_AUTO_ADVANCE_S = 3.5
+# When all rounds are done, the winner podium returns to the idle menu by itself.
+WINNER_AUTO_RETURN_S = 12.0
 
 # Pygame keyboard equivalents so the GUI is testable without the remote.
 KEY_DIGIT_MAP = {
@@ -126,6 +212,10 @@ KEY_DIGIT_MAP = {
     pygame.K_KP0: 10, pygame.K_0: 10,
 }
 
+# Numpad digit -> remote button index (inverse of NUMPAD_BUTTONS), so keyboard
+# testing of the button check marks the same tile a remote press would.
+DIGIT_TO_BUTTON = {digit: btn for btn, digit in NUMPAD_BUTTONS.items()}
+
 # Remote: press check (button 1), then numpad 1 (button 9) within
 # LANG_CHORD_WINDOW_S toggles UI language. Keyboard: hold ` (backtick) and
 # press Numpad 1. Not active during the button-check screen.
@@ -140,12 +230,23 @@ class Screen(Enum):
     LOADING = auto()
     BAND_5GHZ = auto()
     OUT_OF_RANGE = auto()
+    SEARCHING = auto()
     CONNECTED_OK = auto()
     BUTTON_CHECK = auto()
     MAIN_MENU = auto()
     ROUND_SELECT = auto()
     COUNTDOWN = auto()
     PLAYING = auto()
+
+
+# Screens that are part of getting/keeping the link (vs. actually in the game).
+CONNECTION_SCREENS = frozenset({
+    Screen.SETUP, Screen.LOADING, Screen.BAND_5GHZ, Screen.OUT_OF_RANGE,
+    Screen.SEARCHING, Screen.CONNECTED_OK, Screen.BUTTON_CHECK,
+})
+GAME_SCREENS = frozenset({
+    Screen.MAIN_MENU, Screen.ROUND_SELECT, Screen.COUNTDOWN, Screen.PLAYING,
+})
 
 
 class PlayingPhase(Enum):
@@ -170,6 +271,7 @@ class AppState:
     player_count: int = 0
     round_count: int = 0
     countdown_start: float = 0.0
+    last_countdown_label: str = ""  # last 3-2-1 glyph pushed to the remote OLED
     last_button_label: str = ""
     last_button_at: float = 0.0
     fullscreen: bool = False
@@ -188,6 +290,11 @@ class AppState:
     player_scores: list[int] = field(default_factory=lambda: [0] * 11)
     playback_ignore_until: float = 0.0
     leaderboard_started_at: float = 0.0
+    wait_advance_started_at: float = 0.0  # entered the "round over" wait at this time
+    rounds_finished_at: float = 0.0       # whole game finished at this time
+    notice_text: str = ""           # transient top-center toast (autostart, etc.)
+    notice_until: float = 0.0       # show the toast until this monotonic time
+    search_attempts: int = 0        # failed reconnect attempts reported by the worker
 
 
 class App:
@@ -198,7 +305,17 @@ class App:
         except pygame.error:
             pass
         pygame.init()
-        self.L = strings_en
+        # Bulgarian is the default locale. Press Check + Numpad 1 on the
+        # remote (or hold ` and tap Numpad 1 on the keyboard) to toggle to
+        # English — see `_toggle_locale`.
+        self.L = strings_bg
+        # Window icon — drop the default pygame snake for the VR Varna mark.
+        icon = _make_vr_varna_icon(64)
+        if icon is not None:
+            try:
+                pygame.display.set_icon(icon)
+            except pygame.error:
+                pass
         pygame.display.set_caption(self.L.WINDOW_TITLE)
         self.screen = pygame.display.set_mode(WINDOW_SIZE, _WINDOW_FLAGS)
         self.clock = pygame.time.Clock()
@@ -234,9 +351,57 @@ class App:
         self.reload_button_rect = pygame.Rect(0, 0, 220, 80)
         self.skip_button_rect = pygame.Rect(0, 0, 220, 60)
         self.button_check_continue_rect = pygame.Rect(0, 0, 280, 72)
+        # Clickable wait-phase action rows, repopulated each frame.
+        self._wait_action_rects: list[tuple[pygame.Rect, str]] = []
+        # Click target for the podium's back-to-menu button.
+        self.winner_back_button_rect = pygame.Rect(0, 0, 0, 0)
         self._menu_logo_cache: tuple[tuple[int, int], pygame.Surface] | None = None
 
+        # Persistent prefs (run-at-startup, first-setup-done).
+        self.config = app_config.load()
+        # First launch of the packaged app turns on run-at-startup by default
+        # (the user disables it with Ctrl+O). Only the frozen .exe does this, and
+        # only once, so we never re-enable it after they turn it off — and dev
+        # runs never consume the "first run" flag meant for the .exe.
+        # The extra `not is_enabled()` guard means that if the config write ever
+        # failed but the registry entry persisted, we won't keep re-enabling
+        # autostart on every launch (re-enabling after the user's Ctrl+O).
+        if (getattr(sys, "frozen", False)
+                and not self.config.get("autostart_initialized")
+                and autostart.is_supported()
+                and not autostart.is_enabled()):
+            autostart.enable()
+            self.config["autostart_initialized"] = True
+            app_config.save(self.config)
+        # Returning users (setup already done once) auto-connect on launch and
+        # skip straight past the setup screens into the game.
+        self._auto_connect_pending = bool(self.config.get("setup_completed"))
+
     # ------------------------------------------------------------------ helpers
+
+    def _is_connection_screen(self, screen: "Screen | None" = None) -> bool:
+        return (screen or self.state.screen) in CONNECTION_SCREENS
+
+    def _is_game_screen(self, screen: "Screen | None" = None) -> bool:
+        return (screen or self.state.screen) in GAME_SCREENS
+
+    def _flash_notice(self, text: str, secs: float = 2.4) -> None:
+        """Show a brief top-center toast (autostart toggles, etc.)."""
+        self.state.notice_text = text
+        self.state.notice_until = time.monotonic() + secs
+
+    def _toggle_autostart(self) -> None:
+        if not autostart.is_supported():
+            self._flash_notice(self.L.AUTOSTART_UNAVAILABLE)
+            return
+        # The registry Run key is the source of truth, so just flip it.
+        enabled = autostart.toggle()
+        self._flash_notice(self.L.AUTOSTART_ON if enabled else self.L.AUTOSTART_OFF)
+
+    def _mark_setup_completed(self) -> None:
+        if not self.config.get("setup_completed"):
+            self.config["setup_completed"] = True
+            app_config.save(self.config)
 
     def _make_fountain(self, side: str) -> NoteFountain:
         w, h = self.screen.get_size()
@@ -294,21 +459,28 @@ class App:
         if status is not None:
             self.state.status_text = status
         if screen == Screen.MAIN_MENU and prev != Screen.MAIN_MENU:
-            self._push_leaderboard_remote()
+            # Back at the menu means no game is playing — send the remote to its
+            # idle logo rather than leaving a stale song / leaderboard up.
+            self.connector.send_idle()
 
     def _all_button_check_tiles_pressed(self) -> bool:
         st = self.state
         return all(st.button_check_done.get(btn, False) for btn in BUTTON_CHECK_SEQUENCE)
 
     def _button_check_can_continue(self) -> bool:
-        """True when the ordered walk is finished or every pad was hit at least once."""
+        """True only once every pad has actually been pressed (no skipping)."""
         st = self.state
         if st.screen != Screen.BUTTON_CHECK:
             return False
-        return (
-            st.button_check_idx >= len(BUTTON_CHECK_SEQUENCE)
-            or self._all_button_check_tiles_pressed()
-        )
+        return self._all_button_check_tiles_pressed()
+
+    def _advance_button_check_highlight(self) -> None:
+        """Move the highlight to the first tile that hasn't been pressed yet."""
+        st = self.state
+        while (st.button_check_idx < len(BUTTON_CHECK_SEQUENCE)
+               and st.button_check_done.get(
+                   BUTTON_CHECK_SEQUENCE[st.button_check_idx], False)):
+            st.button_check_idx += 1
 
     def go_fullscreen(self) -> None:
         if self.state.fullscreen:
@@ -320,6 +492,7 @@ class App:
         )
         self.state.fullscreen = True
         self._menu_logo_cache = None
+        invalidate_background_cache()
         self._refresh_fountain_areas()
 
     def go_windowed(self) -> None:
@@ -328,6 +501,7 @@ class App:
         self.screen = pygame.display.set_mode(WINDOW_SIZE, _WINDOW_FLAGS)
         self.state.fullscreen = False
         self._menu_logo_cache = None
+        invalidate_background_cache()
         self._refresh_fountain_areas()
 
     # ------------------------------------------------------------------ events
@@ -339,33 +513,94 @@ class App:
     def _handle_event(self, ev: Event) -> None:
         st = self.state
         if ev.kind == "status":
+            # SEARCHING keeps its dedicated "Searching for remote" line; the
+            # other connection screens show live worker progress.
             if st.screen in (Screen.LOADING, Screen.OUT_OF_RANGE, Screen.BAND_5GHZ):
                 st.status_text = self.L.translate_worker_status(ev.text)
         elif ev.kind == "error":
             if ev.text.startswith("NET5GHZ:"):
                 _, ssid, _ = (ev.text.split(":", 2) + ["", ""])[:3]
                 st.last_5ghz_ssid = ssid
-                self.set_screen(Screen.BAND_5GHZ,
-                                status=self.L.STATUS_5GHZ)
+                # Needs a human to switch Wi-Fi band; don't yank an active game.
+                if not self._is_game_screen():
+                    self.set_screen(Screen.BAND_5GHZ, status=self.L.STATUS_5GHZ)
             elif ev.text == "OUTOFRANGE":
-                self.set_screen(Screen.OUT_OF_RANGE,
-                                status=self.L.STATUS_OOR)
+                # The worker auto-retries; just keep a "looking" screen up while
+                # we're in the connection flow (and not already searching). This
+                # only fires when the Wi-Fi band is fine, so it also clears a
+                # stale 5 GHz warning once the user has switched bands.
+                if self._is_connection_screen() and st.screen not in (
+                        Screen.SEARCHING, Screen.SETUP):
+                    self.set_screen(Screen.LOADING, status=self.L.STATUS_OOR)
             else:
                 st.last_error = ev.text
-                if st.screen in (Screen.LOADING, Screen.CONNECTED_OK,
-                                  Screen.BUTTON_CHECK):
-                    self.set_screen(Screen.OUT_OF_RANGE,
-                                    status=self.L.STATUS_LOST_LINK.format(
-                                        err=self.L.translate_connection_error(ev.text)))
+                # A mid-setup link error falls back to the connecting screen.
+                if st.screen in (Screen.CONNECTED_OK, Screen.BUTTON_CHECK):
+                    self.set_screen(
+                        Screen.LOADING,
+                        status=self.L.STATUS_LOST_LINK.format(
+                            err=self.L.translate_connection_error(ev.text)))
+        elif ev.kind == "searching":
+            try:
+                st.search_attempts = int(ev.text)
+            except (ValueError, TypeError):
+                st.search_attempts = 0
+            # Show the dedicated search screen, but never interrupt a live game
+            # or the manual Wi-Fi-band warning.
+            if self._is_connection_screen() and st.screen != Screen.BAND_5GHZ:
+                self.set_screen(Screen.SEARCHING, status=self.L.STATUS_SEARCHING)
         elif ev.kind == "connected":
-            self.set_screen(Screen.CONNECTED_OK,
-                            status=self.L.STATUS_CONNECTED.format(addr=ev.text))
+            self._on_connected(ev)
         elif ev.kind == "disconnected":
-            if st.screen not in (Screen.SETUP, Screen.BAND_5GHZ):
-                self.set_screen(Screen.OUT_OF_RANGE,
-                                status=self.L.STATUS_DISCONNECTED)
+            self._on_disconnected()
         elif ev.kind == "button":
             self._on_button(ev)
+        # "volume" events are ignored on purpose: audio is fixed at 100%.
+
+    def _on_connected(self, ev: Event) -> None:
+        st = self.state
+        # Reconnected mid-game: re-sync whatever the OLED should show, keep playing.
+        if self._is_game_screen():
+            self._resync_remote_display()
+            return
+        if self.config.get("setup_completed"):
+            # Returning user: skip the button check, go straight into the game.
+            self.go_fullscreen()
+            self.set_screen(Screen.MAIN_MENU, status="")
+        else:
+            self.set_screen(Screen.CONNECTED_OK,
+                            status=self.L.STATUS_CONNECTED.format(addr=ev.text))
+
+    def _resync_remote_display(self) -> None:
+        """Re-push whatever the OLED should be showing for the current game
+        state, so a mid-game reconnect restores the remote display instead of
+        leaving it stale until the next transition."""
+        st = self.state
+        if st.screen in (Screen.MAIN_MENU, Screen.ROUND_SELECT):
+            self.connector.send_idle()
+        elif st.screen == Screen.COUNTDOWN:
+            if st.last_countdown_label:
+                self.connector.send_countdown(st.last_countdown_label)
+            else:
+                self.connector.send_idle()
+        elif st.screen == Screen.PLAYING:
+            if st.rounds_finished or st.playing_phase == PlayingPhase.LEADERBOARD:
+                self._push_leaderboard_remote()
+            elif st.current_song is not None and not st.play_error:
+                self.connector.send_song(st.current_song.artist,
+                                          st.current_song.title)
+            else:
+                self.connector.send_idle()
+
+    def _on_disconnected(self) -> None:
+        st = self.state
+        # In a live game we keep going; the worker reconnects in the background.
+        if self._is_game_screen():
+            return
+        # On a connection screen, reflect "reconnecting" (the worker keeps
+        # trying; the search screen takes over after enough failures).
+        if st.screen not in (Screen.SETUP, Screen.BAND_5GHZ, Screen.SEARCHING):
+            self.set_screen(Screen.LOADING, status=self.L.STATUS_DISCONNECTED)
 
     def _on_button(self, ev: Event) -> None:
         st = self.state
@@ -393,14 +628,16 @@ class App:
         if st.screen == Screen.BUTTON_CHECK:
             if ev.button is None:
                 return
-            if self._button_check_can_continue():
+            if self._all_button_check_tiles_pressed():
+                # Every tile verified: any remote button continues.
                 self._finish_button_check()
                 return
-            if st.button_check_idx < len(BUTTON_CHECK_SEQUENCE):
-                expected = BUTTON_CHECK_SEQUENCE[st.button_check_idx]
-                st.button_check_done[expected] = True
+            # Only the button actually pressed marks its own tile, so you can't
+            # skip ahead by mashing one button. Unmapped buttons are ignored.
+            if (ev.button in BUTTON_CHECK_SEQUENCE
+                    and not st.button_check_done.get(ev.button, False)):
                 st.button_check_done[ev.button] = True
-                st.button_check_idx += 1
+                self._advance_button_check_highlight()
             return
 
         if st.screen == Screen.MAIN_MENU and ev.digit is not None:
@@ -416,7 +653,12 @@ class App:
                     self._end_game_and_return_to_menu()
                 return
             if ev.digit is not None:
-                self._register_guess(ev.digit)
+                # During the buzz pause a digit re-picks who gets the points;
+                # otherwise it registers a fresh buzz-in.
+                if st.playing_phase == PlayingPhase.WAIT_CONFIRM:
+                    self._reselect_guess(ev.digit)
+                else:
+                    self._register_guess(ev.digit)
                 return
             if ev.button == LANG_TOGGLE_CHECK_BTN:
                 ph = st.playing_phase
@@ -449,7 +691,7 @@ class App:
         if st.screen == Screen.SETUP:
             self._start_connection()
             return True
-        if st.screen in (Screen.BAND_5GHZ, Screen.OUT_OF_RANGE):
+        if st.screen in (Screen.BAND_5GHZ, Screen.OUT_OF_RANGE, Screen.SEARCHING):
             self._reload()
             return True
         if st.screen == Screen.CONNECTED_OK:
@@ -458,6 +700,9 @@ class App:
         return False
 
     def _finish_button_check(self) -> None:
+        # First completed setup: remember it so future launches auto-connect and
+        # skip straight here.
+        self._mark_setup_completed()
         self.go_fullscreen()
         self.set_screen(Screen.MAIN_MENU, status="")
 
@@ -480,6 +725,7 @@ class App:
         self.state.dual_check_hold_accum_s = 0.0
         self.state.player_scores = [0] * 11
         self.state.countdown_start = time.monotonic()
+        self.state.last_countdown_label = ""
         self.set_screen(Screen.COUNTDOWN, status="")
 
     # ------------------------------------------------------------ game helpers
@@ -488,7 +734,11 @@ class App:
         st = self.state
         if st.screen != Screen.PLAYING or st.rounds_finished or st.play_error:
             return False
-        return st.playing_phase in (PlayingPhase.CLIP_1, PlayingPhase.CLIP_2)
+        # Also allow buzzing during the pause after clip 1 (WAIT_REVEAL), so a
+        # number can be picked for the player who answered there too.
+        return st.playing_phase in (
+            PlayingPhase.CLIP_1, PlayingPhase.CLIP_2, PlayingPhase.WAIT_REVEAL,
+        )
 
     def _register_guess(self, digit: int) -> None:
         st = self.state
@@ -505,24 +755,33 @@ class App:
         st.dual_check_hold_accum_s = 0.0
         st.status_text = self.L.PLAYING_HINT_WAIT_CONFIRM
 
+    def _reselect_guess(self, digit: int) -> None:
+        """While paused for a buzz, change which player the points go to.
+
+        Lets the host correct who actually answered without resuming the clip;
+        the +1 / +2 buttons then award that player.
+        """
+        st = self.state
+        if st.screen != Screen.PLAYING or st.playing_phase != PlayingPhase.WAIT_CONFIRM:
+            return
+        if digit < 1 or digit > st.player_count:
+            return
+        st.guessed_player = digit
+        st.status_text = self.L.PLAYING_HINT_WAIT_CONFIRM
+
     def _leaderboard_ranked_pairs(self) -> list[tuple[int, int]]:
         pc = self.state.player_count
         pairs = [(p, self.state.player_scores[p]) for p in range(1, max(1, pc + 1))]
         pairs.sort(key=lambda x: (-x[1], x[0]))
         return pairs
 
-    def _format_leaderboard_lines(self) -> tuple[str, str]:
-        pairs = self._leaderboard_ranked_pairs()
-        short = " ".join(f"P{p}:{s}" for p, s in pairs)
-        if len(short) > 52:
-            short = short[:49] + "…"
-        return self.L.LEADERBOARD_TITLE, short or "—"
-
     def _push_leaderboard_remote(self) -> None:
+        """Push the current top-3 to the remote's OLED leaderboard screen."""
         if self.state.player_count <= 0:
             return
-        top, ranks = self._format_leaderboard_lines()
-        self.connector.send_leaderboard(top, ranks)
+        pairs = self._leaderboard_ranked_pairs()  # already sorted best-first
+        rows = [(f"P{player}", score) for player, score in pairs[:3]]
+        self.connector.send_top3(rows)
 
     def _finalize_round_go_next(self) -> None:
         self._push_leaderboard_remote()
@@ -548,7 +807,10 @@ class App:
             st.play_error = ""
             st.playback_ignore_until = time.monotonic() + 0.22
 
-        pushed = self.connector.send_song(pick.artist, pick.title)
+        # Drive the OLED countdown with the clip's real length so the panel
+        # stays up for exactly as long as the song plays (0 if playback failed).
+        hold_ms = int(self.clip_player.current_length_s() * 1000) if ok else 0
+        pushed = self.connector.send_song(pick.artist, pick.title, hold_ms=hold_ms)
         if pushed:
             st.status_text = self.L.PLAYING_STATUS
         else:
@@ -558,15 +820,13 @@ class App:
         st = self.state
         song = st.current_song
         if song is None:
-            st.playing_phase = PlayingPhase.WAIT_ADVANCE
-            st.status_text = self.L.PLAYING_HINT_WAIT_ADVANCE
+            self._enter_wait_advance()
             return
         try:
             clip_index, path = pick_same_song_other_clip(song.song_id, song.clip_index)
         except LibraryEmpty:
-            st.playing_phase = PlayingPhase.WAIT_ADVANCE
             self.clip_player.stop()
-            st.status_text = self.L.PLAYING_HINT_WAIT_ADVANCE
+            self._enter_wait_advance()
             return
 
         pick = SongPick(
@@ -613,6 +873,16 @@ class App:
         st.guessed_player = None
         rp = st.buzz_resume_phase
         self.clip_player.undo_buzz_pause()
+        # If the buzz happened during the WAIT_REVEAL pause (between clips),
+        # there is no audio to resume — return to that pause and restore its hint
+        # (otherwise the stale "buzz-in" confirm text lingers).
+        if rp == PlayingPhase.WAIT_REVEAL:
+            st.playing_phase = PlayingPhase.WAIT_REVEAL
+            st.status_text = " ".join([
+                self.L.PLAYING_HINT_WAIT_REVEAL,
+                self.L.PLAYING_HINT_GUESS.format(n=st.player_count),
+            ])
+            return
         if rp not in (PlayingPhase.CLIP_1, PlayingPhase.CLIP_2):
             return
         st.playing_phase = rp
@@ -629,6 +899,14 @@ class App:
         else:
             st.status_text = self.L.PLAYING_REMOTE_OFFLINE
 
+    def _enter_wait_advance(self) -> None:
+        """Enter the post-round 'round over' wait and stamp it, so `_update` can
+        flow it into the leaderboard automatically."""
+        st = self.state
+        st.playing_phase = PlayingPhase.WAIT_ADVANCE
+        st.wait_advance_started_at = time.monotonic()
+        st.status_text = self.L.PLAYING_HINT_WAIT_ADVANCE
+
     def _advance_after_clip_finished(self) -> None:
         st = self.state
         ph = st.playing_phase
@@ -642,8 +920,7 @@ class App:
             st.status_text = " ".join(mix)
         elif ph == PlayingPhase.CLIP_2:
             self.clip_player.stop()
-            st.playing_phase = PlayingPhase.WAIT_ADVANCE
-            st.status_text = self.L.PLAYING_HINT_WAIT_ADVANCE
+            self._enter_wait_advance()
 
     def _playing_dual_check_hold(self, dt: float) -> None:
         """Hosts must hold physical Check + Double-check together (~2 s) to undo a buzz.
@@ -705,6 +982,7 @@ class App:
         st = self.state
         if st.current_round >= st.round_count and st.round_count > 0:
             st.rounds_finished = True
+            st.rounds_finished_at = time.monotonic()
             self.clip_player.stop()
             st.current_song = None
             st.status_text = self.L.PLAYING_FINISHED
@@ -748,6 +1026,10 @@ class App:
     # ------------------------------------------------------------------ frame
 
     def run(self) -> None:
+        # Returning user: start connecting immediately, no SETUP screen.
+        if self._auto_connect_pending:
+            self._auto_connect_pending = False
+            self._start_connection()
         running = True
         while running:
             dt = self.clock.tick(FPS) / 1000.0
@@ -758,6 +1040,7 @@ class App:
                 elif event.type == pygame.VIDEORESIZE and not self.state.fullscreen:
                     self.screen = pygame.display.set_mode(event.size, _WINDOW_FLAGS)
                     self._menu_logo_cache = None
+                    invalidate_background_cache()
                     self._refresh_fountain_areas()
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
@@ -786,12 +1069,16 @@ class App:
 
     def _handle_keydown(self, event: pygame.event.Event) -> None:
         st = self.state
+        # Ctrl+O toggles run-at-startup, anywhere.
+        if event.key == pygame.K_o and (pygame.key.get_mods() & pygame.KMOD_CTRL):
+            self._toggle_autostart()
+            return
         if self._try_keyboard_lang_toggle(event):
             return
         if event.key == pygame.K_RETURN or event.key == pygame.K_SPACE:
             if st.screen == Screen.SETUP:
                 self._start_connection()
-            elif st.screen in (Screen.BAND_5GHZ, Screen.OUT_OF_RANGE):
+            elif st.screen in (Screen.BAND_5GHZ, Screen.OUT_OF_RANGE, Screen.SEARCHING):
                 self._reload()
             elif st.screen == Screen.CONNECTED_OK:
                 self._begin_button_check()
@@ -822,17 +1109,20 @@ class App:
                 self._pick_round_count(digit)
             elif st.screen == Screen.PLAYING:
                 if not st.rounds_finished:
-                    self._register_guess(digit)
+                    if st.playing_phase == PlayingPhase.WAIT_CONFIRM:
+                        self._reselect_guess(digit)
+                    else:
+                        self._register_guess(digit)
             elif st.screen == Screen.BUTTON_CHECK:
-                if self._button_check_can_continue():
+                if self._all_button_check_tiles_pressed():
                     self._finish_button_check()
                     return
-                # Allow keyboard to step through during testing without remote.
-                if st.button_check_idx >= len(BUTTON_CHECK_SEQUENCE):
-                    return
-                expected = BUTTON_CHECK_SEQUENCE[st.button_check_idx]
-                st.button_check_done[expected] = True
-                st.button_check_idx += 1
+                # Strict, like the remote: a number marks only its own tile.
+                btn = DIGIT_TO_BUTTON.get(digit)
+                if (btn is not None and btn in BUTTON_CHECK_SEQUENCE
+                        and not st.button_check_done.get(btn, False)):
+                    st.button_check_done[btn] = True
+                    self._advance_button_check_highlight()
 
     def _handle_click(self, pos: tuple[int, int]) -> None:
         st = self.state
@@ -847,6 +1137,73 @@ class App:
                 and self.button_check_continue_rect.collidepoint(pos) \
                 and self._button_check_can_continue():
             self._finish_button_check()
+        elif st.screen == Screen.PLAYING:
+            # Winner-screen "Back to menu" button.
+            if (st.rounds_finished
+                    and self.winner_back_button_rect.width > 0
+                    and self.winner_back_button_rect.collidepoint(pos)):
+                self._end_game_and_return_to_menu()
+                return
+            # Clickable rows in the wait-phase action panel.
+            for rect, action_id in self._wait_action_rects:
+                if rect.collidepoint(pos):
+                    self._dispatch_wait_action(action_id)
+                    return
+
+    def _dispatch_wait_action(self, action_id: str) -> None:
+        """Run the host action attached to a wait-panel button click."""
+        st = self.state
+        if st.play_error or st.rounds_finished:
+            return
+        if action_id == "replay_clip2" \
+                and st.playing_phase == PlayingPhase.WAIT_REVEAL:
+            self._play_second_clip()
+        elif action_id == "confirm1" \
+                and st.playing_phase == PlayingPhase.WAIT_CONFIRM:
+            self._confirm_buzz_scoring(1)
+        elif action_id == "confirm2" \
+                and st.playing_phase == PlayingPhase.WAIT_CONFIRM:
+            self._confirm_buzz_scoring(2)
+        elif action_id == "cancel_buzz" \
+                and st.playing_phase == PlayingPhase.WAIT_CONFIRM:
+            self._void_buzz_false_alarm()
+        elif action_id == "open_scoreboard" \
+                and st.playing_phase == PlayingPhase.WAIT_ADVANCE:
+            self._finalize_round_go_next()
+        elif action_id.startswith("buzz_player_"):
+            # On-screen buzz-in — host clicks a player number to register
+            # the buzz, same as that player tapping the physical numpad.
+            try:
+                digit = int(action_id[len("buzz_player_"):])
+            except ValueError:
+                return
+            self._register_onscreen_buzz(digit)
+
+    def _register_onscreen_buzz(self, digit: int) -> None:
+        """Click-driven buzz. Mirrors :meth:`_register_guess` but is allowed
+        during the WAIT_REVEAL pause too (since that's the only time the
+        numpad is visible on-screen)."""
+        st = self.state
+        if st.screen != Screen.PLAYING or st.rounds_finished or st.play_error:
+            return
+        if digit < 1 or digit > st.player_count:
+            return
+        # Already paused for a buzz: clicking a player just re-picks who scores.
+        if st.playing_phase == PlayingPhase.WAIT_CONFIRM:
+            st.guessed_player = digit
+            return
+        if st.playing_phase not in (
+            PlayingPhase.CLIP_1, PlayingPhase.CLIP_2, PlayingPhase.WAIT_REVEAL,
+        ):
+            return
+        if st.guessed_player is not None:
+            return
+        st.guessed_player = digit
+        st.buzz_resume_phase = st.playing_phase
+        self.clip_player.buzz_pause()
+        st.playing_phase = PlayingPhase.WAIT_CONFIRM
+        st.dual_check_hold_accum_s = 0.0
+        st.status_text = self.L.PLAYING_HINT_WAIT_CONFIRM
 
     def _start_connection(self) -> None:
         self.set_screen(Screen.LOADING,
@@ -866,11 +1223,16 @@ class App:
     # ------------------------------------------------------------------ update
 
     def _update(self, dt: float, t: float) -> None:
-        self.left_notes.update(dt, t)
-        self.right_notes.update(dt, t)
         st = self.state
         if st.screen == Screen.COUNTDOWN:
             elapsed = time.monotonic() - st.countdown_start
+            # Mirror the on-screen number onto the remote OLED as it ticks. Use
+            # an ASCII "GO!" (the OLED font has no Cyrillic) for the final beat.
+            remaining = max(0, 10 - int(elapsed))
+            oled_label = "GO!" if remaining == 0 else str(remaining)
+            if oled_label != st.last_countdown_label:
+                st.last_countdown_label = oled_label
+                self.connector.send_countdown(oled_label)
             if elapsed >= 11:
                 self.set_screen(Screen.PLAYING,
                                 status=self.L.PLAYING_STATUS)
@@ -878,17 +1240,27 @@ class App:
         elif st.screen == Screen.PLAYING:
             self._playing_dual_check_hold(dt)
             self._playing_pulse_brackets_keys()
-            if st.playing_phase == PlayingPhase.LEADERBOARD:
-                if time.monotonic() - st.leaderboard_started_at >= LEADERBOARD_AUTO_ADVANCE_S:
+            now = time.monotonic()
+            # Whole game over: the podium returns to the idle menu on its own.
+            if st.rounds_finished:
+                if now - st.rounds_finished_at >= WINNER_AUTO_RETURN_S:
+                    self._end_game_and_return_to_menu()
+            # Round over with nobody buzzing: flow into the leaderboard by itself.
+            elif st.playing_phase == PlayingPhase.WAIT_ADVANCE:
+                if now - st.wait_advance_started_at >= WAIT_ADVANCE_AUTO_ADVANCE_S:
+                    self._finalize_round_go_next()
+            # Leaderboard shown: auto-start the next round.
+            elif st.playing_phase == PlayingPhase.LEADERBOARD:
+                if now - st.leaderboard_started_at >= LEADERBOARD_AUTO_ADVANCE_S:
                     self._dismiss_leaderboard_and_next_round()
             self._playing_poll_clip_end()
 
     # ------------------------------------------------------------------ draw
 
     def _draw(self, t: float) -> None:
+        # Pure background — no notes, no starfield. Atmospheric color blobs
+        # are baked into the cached background surface.
         draw_background(self.screen)
-        self.left_notes.draw(self.screen, t)
-        self.right_notes.draw(self.screen, t)
 
         st = self.state
         draw_fn = {
@@ -896,6 +1268,7 @@ class App:
             Screen.LOADING: self._draw_loading,
             Screen.BAND_5GHZ: self._draw_band_5ghz,
             Screen.OUT_OF_RANGE: self._draw_out_of_range,
+            Screen.SEARCHING: self._draw_searching,
             Screen.CONNECTED_OK: self._draw_connected_ok,
             Screen.BUTTON_CHECK: self._draw_button_check,
             Screen.MAIN_MENU: self._draw_main_menu,
@@ -905,6 +1278,7 @@ class App:
         }[st.screen]
         draw_fn(t)
         self._draw_status_bar()
+        self._draw_notice_hud()
 
     def _center(self) -> tuple[int, int]:
         w, h = self.screen.get_size()
@@ -916,92 +1290,158 @@ class App:
         rect.center = (cx, cy + dy)
         return rect
 
+    def _connection_status(self) -> tuple[str, str]:
+        """Return (status, label) for the top-right connection pill."""
+        st = self.state.screen
+        if st == Screen.SETUP:
+            return "offline", self.L.STATUS_PILL_OFFLINE
+        if st == Screen.LOADING:
+            return "connecting", self.L.STATUS_PILL_CONNECTING
+        if st == Screen.SEARCHING:
+            return "connecting", self.L.STATUS_PILL_SEARCHING
+        if st in (Screen.BAND_5GHZ, Screen.OUT_OF_RANGE):
+            return "error", self.L.STATUS_PILL_PROBLEM
+        return "connected", self.L.STATUS_PILL_CONNECTED
+
     def _draw_status_bar(self) -> None:
+        """No-op. Removed at user request — the connection pill in the top-
+        right of each card already surfaces the link state, and the primary
+        button label tells the user what to do next."""
+        return
+
+    def _draw_notice_hud(self) -> None:
+        """Brief top-center toast (e.g. the Ctrl+O run-at-startup state)."""
         st = self.state
-        if not st.status_text:
+        if not st.notice_text or time.monotonic() >= st.notice_until:
             return
-        w, h = self.screen.get_size()
-        y = h - 42
-        txt_surf = self.theme.small_font.render(st.status_text, True, INK)
-        txt_rect = txt_surf.get_rect(center=(w // 2, y))
-        self.screen.blit(txt_surf, txt_rect)
-        if st.last_button_label and (time.monotonic() - st.last_button_at) < 2.5:
-            badge = self.theme.small_font.render(
-                f"→ {st.last_button_label}", True, ACCENT_CYAN
-            )
-            self.screen.blit(badge,
-                             badge.get_rect(midright=(w - 22, y)))
+        w, _h = self.screen.get_size()
+        self._draw_glass_pill_chip((w // 2, 38), st.notice_text)
 
     # ------------------ individual screens ---------------------------------
 
+    # ------------------ shared card shell ----------------------------------
+
+    def _draw_card_shell(
+        self,
+        *,
+        width: int,
+        height: int,
+        dy: int = 0,
+        wordmark: bool = False,
+        status: Optional[tuple[str, str]] = None,
+        status_t: float = 0.0,
+    ) -> pygame.Rect:
+        """Layout-only "card" — no visible box anymore. Returns the rect
+        the screen content should fit inside. The connection status pill
+        floats in the top-right of the *screen*, not the card."""
+        del wordmark  # the window icon is the brand; no card-corner wordmark
+        panel = self._panel_rect(width, height, dy=dy)
+        if status is not None:
+            kind, label = status
+            sw, _ = self.screen.get_size()
+            draw_status_pill(
+                self.screen,
+                (sw - 24, 30),
+                label,
+                self.theme,
+                status=kind,
+                anchor="midright",
+                t=status_t,
+            )
+        return panel
+
+    def _hover(self, rect: pygame.Rect) -> bool:
+        return rect.collidepoint(pygame.mouse.get_pos())
+
+    # ------------------ setup / loading / connected ------------------------
+
     def _draw_setup(self, t: float) -> None:
-        cx, cy = self._center()
-        panel = self._panel_rect(620, 420, dy=-20)
-        # Wordmark above the headline.
-        draw_doodle_text(self.screen, self.L.TITLE_WORDMARK,
-                          self.theme.body_font, ACCENT_CYAN,
-                          (panel.centerx, panel.top + 44), anchor="center",
-                          shadow=False)
+        panel = self._draw_card_shell(
+            width=640, height=460, dy=-10,
+            status=self._connection_status(), status_t=t,
+        )
         draw_doodle_text(self.screen, self.L.TITLE_APP,
                           self.theme.title_font, INK,
-                          (panel.centerx, panel.top + 90), anchor="center")
-        # Underline accent.
-        ul = pygame.Rect(0, 0, 110, 5)
-        ul.center = (panel.centerx, panel.top + 122)
-        pygame.draw.rect(self.screen, ACCENT_PINK, ul, border_radius=3)
+                          (panel.centerx, panel.top + 96), anchor="center",
+                          shadow=False)
         draw_doodle_text(self.screen, self.L.SETUP_LINE1,
                           self.theme.body_font, INK_SOFT,
-                          (panel.centerx, panel.top + 175), anchor="center",
+                          (panel.centerx, panel.top + 178), anchor="center",
                           shadow=False)
         draw_doodle_text(self.screen, self.L.SETUP_LINE2,
                           self.theme.body_font, INK_SOFT,
-                          (panel.centerx, panel.top + 205), anchor="center",
+                          (panel.centerx, panel.top + 208), anchor="center",
                           shadow=False)
-        self.start_button_rect = pygame.Rect(0, 0, 260, 88)
-        self.start_button_rect.center = (panel.centerx, panel.bottom - 80)
-        mouse = pygame.mouse.get_pos()
-        draw_chunky_button(self.screen, self.start_button_rect, self.L.BTN_START,
-                            self.theme, fill=ACCENT_GREEN,
-                            text_color=(15, 25, 30),
-                            hovered=self.start_button_rect.collidepoint(mouse))
+        self.start_button_rect = pygame.Rect(0, 0, 180, 48)
+        self.start_button_rect.center = (panel.centerx, panel.bottom - 52)
+        draw_pill_button(self.screen, self.start_button_rect, self.L.BTN_START,
+                          self.theme, primary=True,
+                          hovered=self._hover(self.start_button_rect))
 
     def _draw_loading(self, t: float) -> None:
-        cx, cy = self._center()
-        panel = self._panel_rect(560, 320, dy=-10)
+        panel = self._draw_card_shell(
+            width=560, height=320, dy=-10,
+            status=self._connection_status(), status_t=t,
+        )
         draw_doodle_text(self.screen, self.L.LOADING_TITLE,
                           self.theme.title_font, INK,
-                          (panel.centerx, panel.top + 72), anchor="center")
-        # Five neon dots traveling in a wave.
-        colors = [ACCENT_PINK, ACCENT_CYAN, ACCENT_YELLOW, ACCENT_GREEN, PURPLE]
-        for i, color in enumerate(colors):
-            phase = t * 4 - i * 0.6
-            scale = 0.7 + 0.6 * (0.5 + 0.5 * math.sin(phase))
-            r = int(11 * scale)
-            x = panel.centerx - 96 + i * 48
-            y = panel.centery + 18 + int(math.sin(phase) * 6)
-            pygame.draw.circle(self.screen, (0, 0, 0, 80), (x + 2, y + 3), r)
-            pygame.draw.circle(self.screen, color, (x, y), r)
-            pygame.draw.circle(self.screen, (255, 255, 255), (x - r // 3, y - r // 3),
-                               max(1, r // 3))
+                          (panel.centerx, panel.top + 96), anchor="center",
+                          shadow=False)
+        # Three muted dots traveling in a wave — anti-aliased via PIL.
+        from doodle import blit_smooth_circle
+        for i in range(3):
+            phase = t * 3.2 - i * 0.4
+            t01 = 0.5 + 0.5 * math.sin(phase)
+            r = 6 + int(2 * t01)
+            x = panel.centerx - 36 + i * 36
+            y = panel.centery + 18
+            alpha = 80 + int(155 * t01)
+            blit_smooth_circle(self.screen, (x, y), r, INK, alpha=alpha)
+
+    def _draw_searching(self, t: float) -> None:
+        """Shown after many failed reconnects: the worker keeps trying on its
+        own at a slower rate; no action is required from the host."""
+        panel = self._draw_card_shell(
+            width=620, height=360, dy=-10,
+            status=self._connection_status(), status_t=t,
+        )
+        draw_doodle_text(self.screen, self.L.SEARCHING_TITLE,
+                          self.theme.title_font, INK,
+                          (panel.centerx, panel.top + 92), anchor="center",
+                          shadow=False)
+        draw_doodle_text(self.screen, self.L.SEARCHING_BODY,
+                          self.theme.body_font, INK_SOFT,
+                          (panel.centerx, panel.top + 150), anchor="center",
+                          shadow=False)
+        from doodle import blit_smooth_circle
+        for i in range(3):
+            phase = t * 3.2 - i * 0.4
+            t01 = 0.5 + 0.5 * math.sin(phase)
+            r = 6 + int(2 * t01)
+            x = panel.centerx - 36 + i * 36
+            y = panel.bottom - 64
+            alpha = 80 + int(155 * t01)
+            blit_smooth_circle(self.screen, (x, y), r, INK, alpha=alpha)
 
     def _draw_warning_screen(self, title: str, lines: list[str], t: float,
                               accent: tuple[int, int, int]) -> None:
-        panel = self._panel_rect(660, 380, dy=-20)
-        draw_doodle_text(self.screen, title, self.theme.title_font, accent,
-                          (panel.centerx, panel.top + 64), anchor="center")
-        ul = pygame.Rect(0, 0, 90, 5)
-        ul.center = (panel.centerx, panel.top + 96)
-        pygame.draw.rect(self.screen, accent, ul, border_radius=3)
+        panel = self._draw_card_shell(
+            width=680, height=400, dy=-10,
+            status=self._connection_status(), status_t=t,
+        )
+        draw_doodle_text(self.screen, title, self.theme.title_font, INK,
+                          (panel.centerx, panel.top + 96), anchor="center",
+                          shadow=False)
+        del accent  # the small dot under the title was removed at user request
         for i, line in enumerate(lines):
-            draw_doodle_text(self.screen, line, self.theme.body_font, INK,
-                              (panel.centerx, panel.top + 140 + i * 36),
+            draw_doodle_text(self.screen, line, self.theme.body_font, INK_SOFT,
+                              (panel.centerx, panel.top + 168 + i * 32),
                               anchor="center", shadow=False)
-        self.reload_button_rect = pygame.Rect(0, 0, 230, 74)
-        self.reload_button_rect.center = (panel.centerx, panel.bottom - 64)
-        mouse = pygame.mouse.get_pos()
-        draw_chunky_button(self.screen, self.reload_button_rect, self.L.BTN_RELOAD,
-                            self.theme, fill=accent, text_color=(20, 20, 30),
-                            hovered=self.reload_button_rect.collidepoint(mouse))
+        self.reload_button_rect = pygame.Rect(0, 0, 180, 48)
+        self.reload_button_rect.center = (panel.centerx, panel.bottom - 52)
+        draw_pill_button(self.screen, self.reload_button_rect, self.L.BTN_RELOAD,
+                          self.theme, primary=True,
+                          hovered=self._hover(self.reload_button_rect))
 
     def _draw_band_5ghz(self, t: float) -> None:
         ssid_line = (self.L.WARN_WIFI_ON_SSID.format(ssid=self.state.last_5ghz_ssid)
@@ -1014,94 +1454,87 @@ class App:
                 self.L.WARN_WIFI_SWITCH,
                 self.L.WARN_WIFI_RELOAD,
             ],
-            t, accent=ACCENT_PINK,
+            t, accent=STATUS_AMBER,
         )
 
     def _draw_out_of_range(self, t: float) -> None:
-        cx, cy = self._center()
-        panel = self._panel_rect(660, 540, dy=-10)
+        panel = self._draw_card_shell(
+            width=660, height=520, dy=-10,
+            status=self._connection_status(), status_t=t,
+        )
         draw_doodle_text(self.screen, self.L.OOR_TITLE,
-                          self.theme.title_font, ACCENT_PINK,
-                          (panel.centerx, panel.top + 50), anchor="center")
-        ul = pygame.Rect(0, 0, 110, 5)
-        ul.center = (panel.centerx, panel.top + 82)
-        pygame.draw.rect(self.screen, ACCENT_PINK, ul, border_radius=3)
-        # Move the controller well below the title so the antenna clears it.
-        draw_remote_placeholder(self.screen,
-                                  (panel.centerx, panel.centery + 40),
-                                  self.theme, t, scale=0.6,
-                                  include_numpad=False)
+                          self.theme.title_font, INK,
+                          (panel.centerx, panel.top + 96), anchor="center",
+                          shadow=False)
         draw_doodle_text(self.screen, self.L.OOR_BODY,
                           self.theme.body_font, INK_SOFT,
-                          (panel.centerx, panel.bottom - 96), anchor="center",
+                          (panel.centerx, panel.bottom - 108), anchor="center",
                           shadow=False)
-        self.reload_button_rect = pygame.Rect(0, 0, 240, 64)
-        self.reload_button_rect.center = (panel.centerx, panel.bottom - 46)
-        mouse = pygame.mouse.get_pos()
-        draw_chunky_button(self.screen, self.reload_button_rect, self.L.BTN_RETRY_NOW,
-                            self.theme, fill=ACCENT_CYAN,
-                            text_color=(15, 25, 30),
-                            hovered=self.reload_button_rect.collidepoint(mouse))
+        self.reload_button_rect = pygame.Rect(0, 0, 200, 48)
+        self.reload_button_rect.center = (panel.centerx, panel.bottom - 48)
+        draw_pill_button(self.screen, self.reload_button_rect,
+                          self.L.BTN_RETRY_NOW, self.theme,
+                          primary=True,
+                          hovered=self._hover(self.reload_button_rect))
 
     def _draw_connected_ok(self, t: float) -> None:
-        cx, cy = self._center()
-        panel = self._panel_rect(660, 560, dy=-20)
+        panel = self._draw_card_shell(
+            width=660, height=540, dy=-10,
+            status=self._connection_status(), status_t=t,
+        )
         draw_doodle_text(self.screen, self.L.CONNECTED_TITLE,
-                          self.theme.title_font, ACCENT_GREEN,
-                          (panel.centerx, panel.top + 50), anchor="center")
-        ul = pygame.Rect(0, 0, 90, 5)
-        ul.center = (panel.centerx, panel.top + 82)
-        pygame.draw.rect(self.screen, ACCENT_GREEN, ul, border_radius=3)
-        # Drop the controller well below the title so the antenna doesn't graze it.
-        draw_remote_placeholder(self.screen,
-                                  (panel.centerx, panel.centery + 30),
-                                  self.theme, t, scale=0.7)
-        draw_doodle_text(self.screen,
-                          self.L.CONNECTED_HINT,
-                          self.theme.small_font, INK_SOFT,
-                          (panel.centerx, panel.bottom - 96), anchor="center",
+                          self.theme.title_font, INK,
+                          (panel.centerx, panel.top + 96), anchor="center",
                           shadow=False)
-        self.skip_button_rect = pygame.Rect(0, 0, 250, 64)
-        self.skip_button_rect.center = (panel.centerx, panel.bottom - 46)
-        mouse = pygame.mouse.get_pos()
-        draw_chunky_button(self.screen, self.skip_button_rect, self.L.BTN_CONTINUE,
-                            self.theme, fill=ACCENT_GREEN,
-                            text_color=(15, 30, 25),
-                            hovered=self.skip_button_rect.collidepoint(mouse))
+        draw_doodle_text(self.screen, self.L.CONNECTED_HINT,
+                          self.theme.small_font, INK_SOFT,
+                          (panel.centerx, panel.bottom - 108), anchor="center",
+                          shadow=False)
+        self.skip_button_rect = pygame.Rect(0, 0, 200, 48)
+        self.skip_button_rect.center = (panel.centerx, panel.bottom - 48)
+        draw_pill_button(self.screen, self.skip_button_rect,
+                          self.L.BTN_CONTINUE, self.theme,
+                          primary=True,
+                          hovered=self._hover(self.skip_button_rect))
 
     def _draw_button_check(self, t: float) -> None:
         st = self.state
         w, h = self.screen.get_size()
         can_continue = self._button_check_can_continue()
-        # Shorter card + slight lift so the grid clears the bottom status line.
-        panel = self._panel_rect(min(w - 96, 780), min(h - 132, 528), dy=-12)
+        panel = self._draw_card_shell(
+            width=min(w - 96, 820), height=min(h - 132, 560),
+            dy=-12,
+            status=self._connection_status(), status_t=t,
+        )
         draw_doodle_text(self.screen, self.L.BUTTON_CHECK_TITLE,
                           self.theme.title_font, INK,
-                          (panel.centerx, panel.top + 50), anchor="center")
+                          (panel.centerx, panel.top + 78), anchor="center",
+                          shadow=False)
         if can_continue:
             draw_doodle_text(self.screen, self.L.BUTTON_CHECK_DONE,
-                              self.theme.body_font, ACCENT_GREEN,
-                              (panel.centerx, panel.top + 95), anchor="center",
+                              self.theme.body_font, STATUS_GREEN,
+                              (panel.centerx, panel.top + 120), anchor="center",
                               shadow=False)
             draw_doodle_text(self.screen, self.L.BUTTON_CHECK_KEYS,
                               self.theme.small_font, INK_SOFT,
-                              (panel.centerx, panel.top + 126), anchor="center",
+                              (panel.centerx, panel.top + 150), anchor="center",
                               shadow=False)
         elif st.button_check_idx < len(BUTTON_CHECK_SEQUENCE):
             target_btn = BUTTON_CHECK_SEQUENCE[st.button_check_idx]
             target_name = self.L.BUTTON_NAMES.get(
                 target_btn, self.L.FB_FALLBACK_BUTTON.format(n=target_btn))
-            draw_doodle_text(self.screen, self.L.BUTTON_CHECK_PRESS.format(label=target_name),
-                              self.theme.body_font, ACCENT_PINK,
-                              (panel.centerx, panel.top + 95), anchor="center",
+            draw_doodle_text(self.screen,
+                              self.L.BUTTON_CHECK_PRESS.format(label=target_name),
+                              self.theme.body_font, INK_SOFT,
+                              (panel.centerx, panel.top + 120), anchor="center",
                               shadow=False)
         cols = 4
         rows = (len(BUTTON_CHECK_SEQUENCE) + cols - 1) // cols
         cell_w = (panel.width - 60) // cols
-        bottom_reserve = 130 if can_continue else 180
+        bottom_reserve = 130 if can_continue else 170
         cell_h = min(95 if can_continue else 110,
                      (panel.height - bottom_reserve) // rows)
-        grid_top = panel.top + 138 if can_continue else panel.top + 130
+        grid_top = panel.top + (158 if can_continue else 156)
         for i, btn in enumerate(BUTTON_CHECK_SEQUENCE):
             r = i // cols
             c = i % cols
@@ -1110,87 +1543,124 @@ class App:
                              grid_top + r * cell_h + 8)
             done = st.button_check_done.get(btn, False)
             current = (i == st.button_check_idx)
-            if done:
-                fill = ACCENT_GREEN
-                ink = (15, 30, 25)
-            elif current:
-                pulse = 0.5 + 0.5 * math.sin(t * 5)
-                base = ACCENT_CYAN
-                fill = (int(base[0] * (0.55 + 0.45 * pulse)),
-                        int(base[1] * (0.55 + 0.45 * pulse)),
-                        int(base[2] * (0.55 + 0.45 * pulse)))
-                ink = (15, 25, 30)
-            else:
-                fill = PANEL_HI
-                ink = INK_SOFT
-            self._draw_tile(tile, fill, label_color=ink,
-                              label=self.L.BUTTON_NAMES.get(
-                                  btn, self.L.FB_FALLBACK_BUTTON.format(n=btn)),
-                              done=done)
+            self._draw_glass_tile(
+                tile,
+                label=self.L.BUTTON_NAMES.get(
+                    btn, self.L.FB_FALLBACK_BUTTON.format(n=btn)),
+                accent=STATUS_GREEN if done else (STATUS_BLUE if current else None),
+                active=current and not done,
+                done=done,
+                t=t,
+            )
         if can_continue:
-            self.button_check_continue_rect = pygame.Rect(0, 0, 290, 72)
+            self.button_check_continue_rect = pygame.Rect(0, 0, 200, 48)
             self.button_check_continue_rect.midbottom = (
-                panel.centerx, panel.bottom - 24)
-            mouse = pygame.mouse.get_pos()
-            draw_chunky_button(
-                self.screen, self.button_check_continue_rect, self.L.BTN_CONTINUE,
-                self.theme, fill=ACCENT_GREEN, text_color=(15, 30, 25),
-                hovered=self.button_check_continue_rect.collidepoint(mouse),
+                panel.centerx, panel.bottom - 20)
+            draw_pill_button(
+                self.screen, self.button_check_continue_rect,
+                self.L.BTN_CONTINUE, self.theme,
+                primary=True,
+                hovered=self._hover(self.button_check_continue_rect),
             )
 
+    def _draw_glass_tile(self, tile: pygame.Rect, *,
+                          label: str,
+                          accent: Optional[tuple[int, int, int]] = None,
+                          active: bool = False,
+                          done: bool = False,
+                          t: float = 0.0,
+                          font: Optional[pygame.font.Font] = None) -> None:
+        """Frosted-glass rounded tile with anti-aliased corners + optional
+        accent highlight for done / active states."""
+        from doodle import _rounded_mask, _rounded_stroke
+        radius = max(14, tile.height // 4)
+        draw_glass_card(self.screen, tile, radius=radius,
+                         tint=GLASS_TINT_SOFT,
+                         stroke=(255, 255, 255, 36),
+                         spotlight=False, shadow=False)
+        if accent is not None:
+            mask = _rounded_mask(tile.size, radius)
+            wash = pygame.Surface(tile.size, pygame.SRCALPHA)
+            base_alpha = 56 if done else (
+                int(30 + 24 * (0.5 + 0.5 * math.sin(t * 4.5))) if active else 22
+            )
+            wash.fill((*accent, base_alpha))
+            wash.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+            self.screen.blit(wash, tile.topleft)
+            stroke_alpha = 200 if done else (170 if active else 120)
+            self.screen.blit(
+                _rounded_stroke(tile.size, radius,
+                                  (*accent, stroke_alpha), width=2),
+                tile.topleft,
+            )
+        font = font or self.theme.small_font
+        txt = font.render(label, True, INK)
+        self.screen.blit(txt, txt.get_rect(center=tile.center))
+        if done:
+            badge_r = 11
+            bx = tile.right - badge_r - 10
+            by = tile.top + badge_r + 10
+            # Anti-aliased filled circle using a temporary surface.
+            badge_sz = (badge_r * 2 + 4, badge_r * 2 + 4)
+            badge_surf = pygame.Surface(badge_sz, pygame.SRCALPHA)
+            try:
+                from PIL import Image, ImageDraw
+                img = Image.new("RGBA", (badge_sz[0] * 2, badge_sz[1] * 2),
+                                (0, 0, 0, 0))
+                ImageDraw.Draw(img).ellipse(
+                    (2 * 2, 2 * 2,
+                     (badge_sz[0] - 2) * 2, (badge_sz[1] - 2) * 2),
+                    fill=(*STATUS_GREEN, 255),
+                )
+                img = img.resize(badge_sz, Image.LANCZOS)
+                badge_surf = pygame.image.frombytes(
+                    img.tobytes(), badge_sz, "RGBA").convert_alpha()
+            except Exception:
+                pygame.draw.circle(badge_surf, STATUS_GREEN,
+                                   (badge_sz[0] // 2, badge_sz[1] // 2),
+                                   badge_r)
+            self.screen.blit(badge_surf, (bx - badge_sz[0] // 2,
+                                            by - badge_sz[1] // 2))
+            pygame.draw.lines(
+                self.screen,
+                (14, 30, 22),
+                False,
+                [
+                    (bx - 5, by + 1),
+                    (bx - 1, by + 5),
+                    (bx + 6, by - 4),
+                ],
+                3,
+            )
+
+    # Kept for compatibility — round-select tile pad. Wraps the glass tile.
     def _draw_tile_with_font(self, tile: pygame.Rect,
                               fill: tuple[int, int, int],
                               label_color: tuple[int, int, int],
                               label: str,
                               font: pygame.font.Font) -> None:
-        base = doodle._shade(fill, 0.55)
-        pygame.draw.rect(self.screen, base, tile.move(0, 6), border_radius=14)
-        pygame.draw.rect(self.screen, fill, tile, border_radius=14)
-        pygame.draw.rect(self.screen, doodle._shade(fill, 0.4), tile,
-                          width=2, border_radius=14)
-        hl = pygame.Rect(tile.left + 6, tile.top + 4,
-                         tile.width - 12, max(4, tile.height // 4))
-        hl_surf = pygame.Surface(hl.size, pygame.SRCALPHA)
-        pygame.draw.rect(hl_surf, (255, 255, 255, 55),
-                          pygame.Rect(0, 0, hl.width, hl.height),
-                          border_radius=12)
-        self.screen.blit(hl_surf, hl.topleft)
-        txt = font.render(label, True, label_color)
-        self.screen.blit(txt, txt.get_rect(center=tile.center))
+        del label_color
+        self._draw_glass_tile(tile, label=label, accent=fill, font=font)
 
     def _draw_tile(self, tile: pygame.Rect,
                     fill: tuple[int, int, int],
                     label_color: tuple[int, int, int],
                     label: str, done: bool) -> None:
-        """Chunky 3D-feeling tile (matches the in-app button language)."""
-        base = doodle._shade(fill, 0.55)
-        pygame.draw.rect(self.screen, base, tile.move(0, 6), border_radius=14)
-        pygame.draw.rect(self.screen, fill, tile, border_radius=14)
-        pygame.draw.rect(self.screen, doodle._shade(fill, 0.4), tile,
-                          width=2, border_radius=14)
-        # Top highlight.
-        hl = pygame.Rect(tile.left + 6, tile.top + 4,
-                         tile.width - 12, max(4, tile.height // 4))
-        hl_surf = pygame.Surface(hl.size, pygame.SRCALPHA)
-        pygame.draw.rect(hl_surf, (255, 255, 255, 55),
-                          pygame.Rect(0, 0, hl.width, hl.height),
-                          border_radius=12)
-        self.screen.blit(hl_surf, hl.topleft)
-        txt = self.theme.small_font.render(label, True, label_color)
-        self.screen.blit(txt, txt.get_rect(center=tile.center))
-        if done:
-            check = self.theme.title_font.render(self.L.TILE_OK, True, (15, 30, 25))
-            self.screen.blit(check,
-                               check.get_rect(midright=(tile.right - 12,
-                                                          tile.top + 18)))
+        del label_color
+        self._draw_glass_tile(tile, label=label, accent=fill, done=done)
 
     def _draw_main_menu(self, t: float) -> None:
         w, h = self.screen.get_size()
+        # Small status pill in the top-right — like the console UI overlays
+        # that show what's online without stealing focus.
+        kind, label = self._connection_status()
+        draw_status_pill(self.screen, (w - 24, 30), label, self.theme,
+                          status=kind, t=t, anchor="midright")
+
         banner_reserve = 160
         max_logo_w = max(160, min(380, int(w * 0.38)))
         max_logo_h = max(120, min(200, int((h - banner_reserve) * 0.30)))
         logo = self._scaled_menu_logo(max_logo_w, max_logo_h)
-        # Anchor logo slightly above centre so hints fit comfortably underneath.
         logo_cy = h // 2 - max(56, min(110, h // 14))
 
         if logo is not None:
@@ -1220,81 +1690,73 @@ class App:
         face_heavy = title_font_file(rounded_display=rd)
         head_font = pygame.font.Font(face_heavy, head_size) if face_heavy else pygame.font.Font(None, head_size)
         head_font.set_bold(False)
-        draw_doodle_text(self.screen,
-                          self.L.players_phrase(self.state.player_count),
-                          self.theme.title_font, ACCENT_CYAN,
-                          (w // 2, 90), anchor="center", shadow=False)
+
+        # Small status pill in the corner, same as main menu.
+        kind, label = self._connection_status()
+        draw_status_pill(self.screen, (w - 24, 30), label, self.theme,
+                          status=kind, t=t, anchor="midright")
+
+        # Small "n players" chip above the headline.
+        self._draw_glass_pill_chip(
+            (w // 2, 80),
+            self.L.players_phrase(self.state.player_count),
+        )
+
         draw_doodle_text(self.screen, self.L.ROUND_TITLE,
                           head_font, INK,
-                          (w // 2, 170), anchor="center")
-        ul = pygame.Rect(0, 0, 200, 6)
-        ul.center = (w // 2, 170 + head_size // 2 + 14)
-        pygame.draw.rect(self.screen, ACCENT_PINK, ul, border_radius=3)
+                          (w // 2, 168), anchor="center", shadow=False)
         draw_doodle_text(self.screen, self.L.ROUND_HINT,
                           self.theme.body_font, INK_SOFT,
-                          (w // 2, ul.bottom + 32), anchor="center", shadow=False)
-        # Chunky 5×2 number pad sized to fit the available area.
+                          (w // 2, 168 + head_size // 2 + 50),
+                          anchor="center", shadow=False)
+        # 5×2 number pad — frosted glass tiles, no chunky 3D.
         pad_cols, pad_rows = 5, 2
-        avail_top = ul.bottom + 70
-        avail_bottom = h - 90  # leave space for the status bar
+        avail_top = 168 + head_size // 2 + 90
+        avail_bottom = h - 90
         avail_w = w - 120
-        cell = max(56, min(110,
+        cell = max(56, min(120,
                             min(avail_w // (pad_cols + 1),
                                 (avail_bottom - avail_top) // (pad_rows + 1) * 2)))
-        gap = max(8, cell // 9)
+        gap = max(10, cell // 7)
         pad_w = pad_cols * cell + (pad_cols - 1) * gap
         pad_h = pad_rows * cell + (pad_rows - 1) * gap
         pad_left = w // 2 - pad_w // 2
         pad_top = (avail_top + avail_bottom) // 2 - pad_h // 2
-        accents = [ACCENT_PINK, ACCENT_CYAN, ACCENT_YELLOW, ACCENT_GREEN, PURPLE,
-                   ACCENT_BLUE, (255, 159, 67), ACCENT_RED,
-                   ACCENT_PINK, ACCENT_CYAN]
         digit_face = title_font_file(rounded_display=rd)
-        digit_font = pygame.font.Font(digit_face, max(28, cell // 2)) if digit_face else pygame.font.Font(
-            None, max(28, cell // 2))
+        digit_font = pygame.font.Font(digit_face, max(30, cell // 2)) if digit_face else pygame.font.Font(
+            None, max(30, cell // 2))
         digit_font.set_bold(False)
         for i, n in enumerate([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]):
             row, col = divmod(i, pad_cols)
             tile = pygame.Rect(0, 0, cell, cell)
             tile.topleft = (pad_left + col * (cell + gap),
                              pad_top + row * (cell + gap))
-            color = accents[i % len(accents)]
-            self._draw_tile_with_font(tile, color, label_color=(15, 25, 30),
-                                       label=str(n if n < 10 else 0),
-                                       font=digit_font)
+            self._draw_glass_tile(
+                tile,
+                label=str(n if n < 10 else 0),
+                accent=None,
+                font=digit_font,
+            )
 
     def _draw_countdown(self, t: float) -> None:
         w, h = self.screen.get_size()
         elapsed = time.monotonic() - self.state.countdown_start
         remaining = max(0, 10 - int(elapsed))
-        accents = [ACCENT_PINK, ACCENT_CYAN, ACCENT_YELLOW,
-                   ACCENT_GREEN, PURPLE, ACCENT_BLUE]
         cx, cy = w // 2, h // 2
-        if remaining == 0:
-            color = ACCENT_GREEN
-            label = self.L.COUNTDOWN_GO
-        else:
-            color = accents[(10 - remaining) % len(accents)]
-            label = str(remaining)
-        scale = 1.0 + 0.45 * (1 - (elapsed - int(elapsed)))
+        # White throughout — no per-digit color cycle.
+        color = INK
+        label = self.L.COUNTDOWN_GO if remaining == 0 else str(remaining)
+        scale = 1.0 + 0.35 * (1 - (elapsed - int(elapsed)))
         base = self.theme.huge_font.render(label, True, color)
         target_w = max(1, int(base.get_width() * scale))
         target_h = max(1, int(base.get_height() * scale))
         big = pygame.transform.smoothscale(base, (target_w, target_h))
-        # Multi-pass glow: render the same text in successive translucent
-        # layers offset around the center for a chunky neon halo, no big halo
-        # ellipse competing with the digit.
-        glow_layers = [
-            (28, 30),
-            (18, 60),
-            (10, 110),
-        ]
-        for offset, alpha in glow_layers:
-            ghost = pygame.transform.smoothscale(base,
-                (target_w + offset * 2, target_h + offset * 2))
-            ghost = ghost.copy()
-            ghost.set_alpha(alpha)
-            self.screen.blit(ghost, ghost.get_rect(center=(cx, cy)))
+        # Single soft glow pass — quieter than the previous triple neon halo.
+        ghost = pygame.transform.smoothscale(
+            base, (target_w + 28, target_h + 28),
+        ).copy()
+        ghost.set_alpha(45)
+        self.screen.blit(ghost, ghost.get_rect(center=(cx, cy)))
         self.screen.blit(big, big.get_rect(center=(cx, cy)))
         draw_doodle_text(self.screen,
                           self.L.rounds_count_bg(self.state.player_count,
@@ -1308,7 +1770,8 @@ class App:
         return x * x * (3.0 - 2.0 * x)
 
     def _draw_leaderboard_phase(self, t: float) -> None:
-        """Kahoot-style full-screen ranking between rounds."""
+        """Full-screen ranking between rounds. Monochrome — no rainbow."""
+        from doodle import _rounded_mask, _rounded_stroke
 
         w, h = self.screen.get_size()
         st = self.state
@@ -1320,9 +1783,10 @@ class App:
             self.screen,
             self.L.LEADERBOARD_TITLE,
             self.theme.title_font,
-            ACCENT_YELLOW,
+            INK,
             (w // 2, 52),
             anchor="center",
+            shadow=False,
         )
         if st.round_count:
             round_label = self.L.PLAYING_ROUND.format(
@@ -1332,41 +1796,34 @@ class App:
                 self.screen,
                 round_label,
                 self.theme.body_font,
-                ACCENT_CYAN,
+                INK_SOFT,
                 (w // 2, 102),
                 anchor="center",
                 shadow=False,
             )
 
-        rank_colors: list[tuple[int, int, int]] = [
-            (255, 215, 0),
-            (186, 198, 218),
-            (205, 127, 50),
-        ]
-        fallback = (
-            ACCENT_CYAN,
-            ACCENT_PINK,
-            ACCENT_GREEN,
-            ACCENT_YELLOW,
-            PURPLE,
-            ACCENT_BLUE,
-        )
+        # "Next round in N s" — counts down toward auto-advance.
+        remaining = max(0, int(math.ceil(
+            LEADERBOARD_AUTO_ADVANCE_S - elapsed
+        )))
+        if remaining > 0:
+            self._draw_glass_pill_chip(
+                (w // 2, 146),
+                self.L.PLAYING_NEXT_IN.format(n=remaining),
+            )
 
         bar_left = max(80, w // 12)
         bar_right_margin = 40
         bar_w_max = w - bar_left - bar_right_margin
         n = len(pairs)
-        row_h = max(30, min(52, (h - 240) // max(n, 1)))
+        row_h = max(30, min(52, (h - 280) // max(n, 1)))
         gap = max(8, row_h // 6)
         total_h = n * (row_h + gap) - gap
-        start_y = (h - total_h) // 2 + 36
+        start_y = (h - total_h) // 2 + 56
+
+        row_radius = max(10, row_h // 3)
 
         for i, (player, score) in enumerate(pairs):
-            if i < len(rank_colors):
-                accent = rank_colors[i]
-            else:
-                accent = fallback[(i - len(rank_colors)) % len(fallback)]
-
             stagger = i * LEADERBOARD_ROW_STAGGER_S
             raw_p = (elapsed - stagger) / LEADERBOARD_ANIM_S
             prog = self._smoothstep01(raw_p)
@@ -1374,32 +1831,47 @@ class App:
             y = start_y + i * (row_h + gap)
             row_rect = pygame.Rect(bar_left, y, bar_w_max, row_h)
 
-            pygame.draw.rect(self.screen, PANEL_HI, row_rect, border_radius=12)
-            pygame.draw.rect(
-                self.screen,
-                doodle._shade(PANEL_HI, 0.35),
-                row_rect,
-                width=1,
-                border_radius=12,
+            # Row body — glass mask + dark wash + hairline stroke. No color.
+            mask = _rounded_mask(row_rect.size, row_radius)
+            wash = pygame.Surface(row_rect.size, pygame.SRCALPHA)
+            wash.fill((22, 26, 36, 130))
+            wash.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+            self.screen.blit(wash, row_rect.topleft)
+            self.screen.blit(
+                _rounded_stroke(row_rect.size, row_radius,
+                                  (255, 255, 255, 50), 1),
+                row_rect.topleft,
             )
 
+            # Fill bar — soft white, only its width signals the score.
             fill_w = int(row_rect.width * (score / max_pts) * prog)
             if fill_w > 4:
-                fr = pygame.Rect(row_rect.left, row_rect.top, fill_w, row_rect.height)
-                pygame.draw.rect(
-                    self.screen,
-                    doodle._shade(accent, 0.42),
-                    fr.move(0, 3),
-                    border_radius=10,
-                )
-                pygame.draw.rect(self.screen, accent, fr, border_radius=10)
+                fr = pygame.Rect(row_rect.left, row_rect.top,
+                                  fill_w, row_rect.height)
+                fr_mask = _rounded_mask(fr.size, row_radius)
+                fill_surf = pygame.Surface(fr.size, pygame.SRCALPHA)
+                fill_surf.fill((255, 255, 255, 38))
+                fill_surf.blit(fr_mask, (0, 0),
+                                special_flags=pygame.BLEND_RGBA_MIN)
+                self.screen.blit(fill_surf, fr.topleft)
 
-            rk_surf = self.theme.small_font.render(str(i + 1), True, (18, 22, 30))
+            # Rank pill — same glass treatment, no per-rank color.
+            rk_surf = self.theme.small_font.render(str(i + 1), True, INK)
             pill_w = max(46, rk_surf.get_width() + 20)
-            pill = pygame.Rect(0, 0, pill_w, row_h - 8)
+            pill_h = row_h - 8
+            pill = pygame.Rect(0, 0, pill_w, pill_h)
             pill.centery = row_rect.centery
             pill.right = bar_left - 10
-            pygame.draw.rect(self.screen, accent, pill, border_radius=10)
+            p_mask = _rounded_mask(pill.size, pill_h // 2)
+            p_wash = pygame.Surface(pill.size, pygame.SRCALPHA)
+            p_wash.fill((22, 26, 36, 150))
+            p_wash.blit(p_mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+            self.screen.blit(p_wash, pill.topleft)
+            self.screen.blit(
+                _rounded_stroke(pill.size, pill_h // 2,
+                                  (255, 255, 255, 70), 1),
+                pill.topleft,
+            )
             self.screen.blit(rk_surf, rk_surf.get_rect(center=pill.center))
 
             label = self.L.LEADERBOARD_PLAYER.format(n=player)
@@ -1415,93 +1887,395 @@ class App:
                 pts_txt.get_rect(midright=(row_rect.right - 12, row_rect.centery)),
             )
 
+    # ----------------------- playing-screen helpers ------------------------
+
+    def _draw_winner_podium(self, t: float) -> None:
+        """Kahoot-style end-of-game podium: gold/silver/bronze columns + a
+        ranked list of also-rans, plus a 'Back to menu' pill button."""
+        from doodle import _rounded_mask, _rounded_stroke, blit_smooth_circle
+        w, h = self.screen.get_size()
+        pairs = self._leaderboard_ranked_pairs()  # already sorted desc
+
+        # Headline.
+        draw_doodle_text(self.screen, self.L.WINNER_TITLE,
+                          self.theme.huge_font, INK,
+                          (w // 2, 90), anchor="center", shadow=False)
+        if pairs:
+            top_player, top_score = pairs[0]
+            sub = self.L.WINNER_SUBTITLE.format(n=top_player, s=top_score)
+            draw_doodle_text(self.screen, sub, self.theme.body_font,
+                              INK_SOFT, (w // 2, 168),
+                              anchor="center", shadow=False)
+
+        # Podium geometry — center 1st, left 2nd, right 3rd.
+        podium_cy = h // 2 + 140
+        column_w = max(140, min(220, w // 6))
+        gap = max(20, column_w // 6)
+        max_pts = max(s for _, s in pairs) if pairs else 1
+        max_pts = max(1, max_pts)
+        # Heights: relative to score, with a minimum so empty columns are
+        # still visible. 1st always tallest because it has the highest score.
+        max_col_h = max(160, min(320, h // 3))
+        min_col_h = max(80, max_col_h // 3)
+
+        # Slight animated grow-in: first 0.6 s of the screen.
+        grow_t = self._smoothstep01(min(1.0, max(0.0,
+            (time.monotonic() - self.state.round_started_at) / 0.6)))
+
+        center_x = w // 2
+        layout_order = [1, 0, 2]  # draw 2nd, 1st, 3rd left→right
+        positions = {
+            0: (center_x,                      "gold"),
+            1: (center_x - column_w - gap,     "silver"),
+            2: (center_x + column_w + gap,     "bronze"),
+        }
+        accent_map = {
+            "gold":   (255, 196, 76),
+            "silver": (190, 200, 220),
+            "bronze": (205, 138, 80),
+        }
+        accent_alpha = 38
+
+        for rank_idx in layout_order:
+            if rank_idx >= len(pairs):
+                continue
+            player, score = pairs[rank_idx]
+            cx, tier = positions[rank_idx]
+            accent = accent_map[tier]
+            score_ratio = score / max_pts
+            col_h = int((min_col_h
+                          + (max_col_h - min_col_h) * score_ratio)
+                         * grow_t)
+            col_top = podium_cy - col_h // 2
+            col_rect = pygame.Rect(cx - column_w // 2, col_top,
+                                    column_w, col_h)
+            radius = 22
+            if col_rect.height <= 4:
+                continue
+            mask = _rounded_mask(col_rect.size, radius)
+            # Base glass wash + faint accent tint so each tier reads slightly.
+            wash = pygame.Surface(col_rect.size, pygame.SRCALPHA)
+            wash.fill((28, 32, 44, 110))
+            wash.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+            self.screen.blit(wash, col_rect.topleft)
+            tint = pygame.Surface(col_rect.size, pygame.SRCALPHA)
+            tint.fill((*accent, accent_alpha))
+            tint.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+            self.screen.blit(tint, col_rect.topleft)
+            self.screen.blit(
+                _rounded_stroke(col_rect.size, radius,
+                                  (*accent, 180), 1),
+                col_rect.topleft,
+            )
+
+            # Medal disc + rank number sitting *above* the column.
+            badge_r = 32
+            badge_cx = cx
+            badge_cy = col_top - badge_r - 10
+            blit_smooth_circle(self.screen, (badge_cx, badge_cy),
+                               badge_r, accent)
+            blit_smooth_circle(self.screen, (badge_cx, badge_cy),
+                               badge_r - 4, (22, 24, 32), alpha=200)
+            rank_num = self.theme.title_font.render(
+                str(rank_idx + 1), True, accent,
+            )
+            self.screen.blit(rank_num,
+                              rank_num.get_rect(center=(badge_cx, badge_cy)))
+
+            # Player label + score inside the column, anchored to the bottom.
+            label = self.L.LEADERBOARD_PLAYER.format(n=player)
+            lbl = self.theme.body_font.render(label, True, INK)
+            self.screen.blit(lbl, lbl.get_rect(
+                midbottom=(cx, col_rect.bottom - 56),
+            ))
+            score_surf = self.theme.title_font.render(str(score), True, INK)
+            self.screen.blit(score_surf, score_surf.get_rect(
+                midbottom=(cx, col_rect.bottom - 18),
+            ))
+
+        # Back-to-menu pill button.
+        btn_rect = pygame.Rect(0, 0, 220, 50)
+        btn_rect.center = (w // 2, h - 56)
+        draw_pill_button(self.screen, btn_rect, self.L.WINNER_BACK_BUTTON,
+                          self.theme, primary=True,
+                          hovered=self._hover(btn_rect))
+        self.winner_back_button_rect = btn_rect
+
+    def _draw_playing_action_panel(self, top_y: int, t: float) -> None:
+        """Kahoot-style action area under the waveform.
+
+        Lays out big tappable controls — primary pill buttons for host
+        actions and a row of circular player-number buttons for on-screen
+        buzz-in. Every interactive element gets recorded into
+        ``self._wait_action_rects`` for `_handle_click`."""
+        st = self.state
+        ph = st.playing_phase
+        # Reset click targets every frame.
+        self._wait_action_rects: list[tuple[pygame.Rect, str]] = []
+        if ph not in (PlayingPhase.WAIT_REVEAL,
+                      PlayingPhase.WAIT_CONFIRM,
+                      PlayingPhase.WAIT_ADVANCE):
+            return
+
+        w, _h = self.screen.get_size()
+        mouse = pygame.mouse.get_pos()
+
+        # ---- Heading -----------------------------------------------------
+        if ph == PlayingPhase.WAIT_CONFIRM and st.guessed_player is not None:
+            heading = self.L.WAIT_CONFIRM_HEADING.format(n=st.guessed_player)
+        elif ph == PlayingPhase.WAIT_REVEAL:
+            heading = self.L.WAIT_REVEAL_HEADING
+        else:  # WAIT_ADVANCE
+            heading = self.L.WAIT_ADVANCE_HEADING
+
+        head_surf = self.theme.title_font.render(heading, True, INK)
+        head_rect = head_surf.get_rect(midtop=(w // 2, top_y))
+        self.screen.blit(head_surf, head_rect)
+
+        # ---- Action controls --------------------------------------------
+        # Heights / gaps shared across the three layouts.
+        btn_h = 56
+        btn_radius = btn_h // 2
+        btn_gap = 16
+        row_y = head_rect.bottom + 28
+
+        def _record(rect: pygame.Rect, action_id: str) -> None:
+            self._wait_action_rects.append((rect, action_id))
+
+        def _primary_button(label: str, action_id: str,
+                              center: tuple[int, int],
+                              width: int) -> pygame.Rect:
+            rect = pygame.Rect(0, 0, width, btn_h)
+            rect.center = center
+            draw_pill_button(
+                self.screen, rect, label, self.theme,
+                primary=True, hovered=rect.collidepoint(mouse),
+            )
+            _record(rect, action_id)
+            return rect
+
+        if ph == PlayingPhase.WAIT_REVEAL:
+            # Big primary button to replay (second clip), then a sub-label
+            # and a row of clickable player numbers for buzz-in.
+            replay_w = max(220, self.theme.body_font.size(
+                self.L.WAIT_REVEAL_REPLAY)[0] + 80)
+            _primary_button(
+                self.L.WAIT_REVEAL_REPLAY, "replay_clip2",
+                (w // 2, row_y + btn_h // 2), replay_w,
+            )
+            sub_y = row_y + btn_h + 18
+            sub = self.theme.small_font.render(
+                self.L.WAIT_REVEAL_BUZZ_HINT, True, INK_SOFT,
+            )
+            self.screen.blit(sub, sub.get_rect(midtop=(w // 2, sub_y)))
+            num_y = sub_y + sub.get_height() + 18
+            self._draw_player_numpad(
+                top_y=num_y,
+                player_count=st.player_count,
+                record=_record,
+            )
+
+        elif ph == PlayingPhase.WAIT_CONFIRM and st.guessed_player is not None:
+            # Three side-by-side primary buttons.
+            labels = [
+                (self.L.WAIT_CONFIRM_ONE,    "confirm1"),
+                (self.L.WAIT_CONFIRM_TWO,    "confirm2"),
+                (self.L.WAIT_CONFIRM_CANCEL, "cancel_buzz"),
+            ]
+            widths = [
+                max(160, self.theme.body_font.size(lbl)[0] + 56)
+                for lbl, _ in labels
+            ]
+            total_w = sum(widths) + btn_gap * (len(labels) - 1)
+            left = w // 2 - total_w // 2
+            cy = row_y + btn_h // 2
+            for (lbl, aid), bw in zip(labels, widths):
+                _primary_button(lbl, aid, (left + bw // 2, cy), bw)
+                left += bw + btn_gap
+            # Re-pick who actually answered (any player, highlighted green); the
+            # +1 / +2 buttons above then award that player. Works even while the
+            # music is paused.
+            sub_y = cy + btn_h // 2 + 18
+            sub = self.theme.small_font.render(
+                self.L.WAIT_CONFIRM_PICK, True, INK_SOFT,
+            )
+            self.screen.blit(sub, sub.get_rect(midtop=(w // 2, sub_y)))
+            self._draw_player_numpad(
+                top_y=sub_y + sub.get_height() + 16,
+                player_count=st.player_count,
+                record=_record,
+                selected=st.guessed_player,
+            )
+
+        else:  # WAIT_ADVANCE
+            advance_w = max(240, self.theme.body_font.size(
+                self.L.WAIT_ADVANCE_NEXT)[0] + 80)
+            _primary_button(
+                self.L.WAIT_ADVANCE_NEXT, "open_scoreboard",
+                (w // 2, row_y + btn_h // 2), advance_w,
+            )
+
+    def _draw_player_numpad(
+        self, *,
+        top_y: int,
+        player_count: int,
+        record,
+        selected: Optional[int] = None,
+    ) -> None:
+        """Row (or two) of circular player-number buttons. Clicking one
+        registers an on-screen buzz-in as if the player hit the numpad.
+        ``top_y`` is the top edge of the numpad block. ``selected`` (if given)
+        is drawn with a green highlight — used during the buzz pause to show
+        which player will receive the points."""
+        from doodle import _rounded_mask, _rounded_stroke
+        w, _h = self.screen.get_size()
+        mouse = pygame.mouse.get_pos()
+        n = max(1, min(player_count, 10))
+        diam = 64
+        gap = 14
+        # Wrap onto two rows when more than 5 players so circles don't shrink.
+        per_row = n if n <= 5 else (n + 1) // 2
+        row1_n = per_row
+        row2_n = n - row1_n
+        def _row_layout(count: int, y: int) -> list[tuple[int, int, int]]:
+            total = count * diam + (count - 1) * gap
+            x0 = w // 2 - total // 2
+            return [
+                (i, x0 + i * (diam + gap) + diam // 2, y)
+                for i in range(count)
+            ]
+        rows = []
+        if row2_n == 0:
+            rows.append(_row_layout(row1_n, top_y + diam // 2))
+        else:
+            rows.append(_row_layout(row1_n, top_y + diam // 2))
+            rows.append(_row_layout(row2_n,
+                                       top_y + diam + gap + diam // 2))
+
+        player_idx = 1
+        for row in rows:
+            for _i, cx, cy in row:
+                rect = pygame.Rect(0, 0, diam, diam)
+                rect.center = (cx, cy)
+                hovered = rect.collidepoint(mouse)
+                is_sel = (selected is not None and player_idx == selected)
+                radius = diam // 2
+                mask = _rounded_mask(rect.size, radius)
+                # Frosted disc — green when selected, lighter on hover.
+                fill = pygame.Surface(rect.size, pygame.SRCALPHA)
+                if is_sel:
+                    fill.fill((*STATUS_GREEN, 110))
+                else:
+                    fill.fill((255, 255, 255, 36 if hovered else 22))
+                fill.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+                self.screen.blit(fill, rect.topleft)
+                stroke_col = ((*STATUS_GREEN, 235) if is_sel
+                              else (255, 255, 255, 170 if hovered else 110))
+                self.screen.blit(
+                    _rounded_stroke(rect.size, radius, stroke_col,
+                                      2 if is_sel else 1),
+                    rect.topleft,
+                )
+                lbl = self.theme.title_font.render(
+                    str(player_idx), True, INK,
+                )
+                self.screen.blit(lbl, lbl.get_rect(center=rect.center))
+                record(rect, f"buzz_player_{player_idx}")
+                player_idx += 1
+
+    def _draw_glass_pill_chip(self, center: tuple[int, int], label: str,
+                                color: tuple[int, int, int] = INK) -> pygame.Rect:
+        """Small glassy pill — anti-aliased, with the frosted-bg crop inside."""
+        from doodle import _rounded_mask, _rounded_stroke, _blurred_background
+        font = self.theme.body_font
+        lbl = font.render(label, True, color)
+        pad_x, pad_y = 18, 8
+        w = lbl.get_width() + pad_x * 2
+        h = lbl.get_height() + pad_y * 2
+        rect = pygame.Rect(0, 0, w, h)
+        rect.center = center
+        radius = h // 2
+        mask = _rounded_mask((w, h), radius)
+        blurred = _blurred_background(self.screen.get_size())
+        crop = pygame.Surface((w, h), pygame.SRCALPHA)
+        crop.blit(blurred, (-rect.left, -rect.top))
+        crop.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+        self.screen.blit(crop, rect.topleft)
+        wash = pygame.Surface((w, h), pygame.SRCALPHA)
+        wash.fill((22, 26, 36, 130))
+        wash.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+        self.screen.blit(wash, rect.topleft)
+        self.screen.blit(_rounded_stroke((w, h), radius,
+                                            (255, 255, 255, 60), 1),
+                          rect.topleft)
+        self.screen.blit(lbl, lbl.get_rect(center=rect.center))
+        return rect
+
     def _draw_playing(self, t: float) -> None:
         w, h = self.screen.get_size()
         st = self.state
 
         if st.play_error:
-            # No library / mixer broken — surface the problem instead of the song.
             draw_doodle_text(self.screen, self.L.PLAYING_TITLE,
-                              self.theme.huge_font, ACCENT_PINK,
+                              self.theme.huge_font, INK,
                               (w // 2, h // 2 - 90), anchor="center")
             draw_doodle_text(self.screen, st.play_error,
-                              self.theme.body_font, INK,
+                              self.theme.body_font, INK_SOFT,
                               (w // 2, h // 2 + 20), anchor="center", shadow=False)
-            draw_doodle_text(self.screen, self.L.PLAYING_NOTE,
-                              self.theme.small_font, INK_DIM,
-                              (w // 2, h // 2 + 110), anchor="center", shadow=False)
             return
 
         if st.playing_phase == PlayingPhase.LEADERBOARD:
             self._draw_leaderboard_phase(t)
             return
 
-        # Round counter strip across the top.
+        if st.rounds_finished:
+            self._draw_winner_podium(t)
+            return
+
+        # Round counter — frosted pill at the top center.
         if st.round_count:
             round_idx = max(1, st.current_round)
             round_label = self.L.PLAYING_ROUND.format(n=round_idx, total=st.round_count)
-        else:
-            round_label = ""
-        if round_label:
-            draw_doodle_text(self.screen, round_label,
-                              self.theme.body_font, ACCENT_CYAN,
-                              (w // 2, 70), anchor="center", shadow=False)
-
-        if st.rounds_finished:
-            draw_doodle_text(self.screen, self.L.PLAYING_TITLE,
-                              self.theme.huge_font, ACCENT_GREEN,
-                              (w // 2, h // 2 - 60), anchor="center")
-            draw_doodle_text(self.screen,
-                              self.L.PLAYING_FINISHED,
-                              self.theme.body_font, INK,
-                              (w // 2, h // 2 + 50), anchor="center", shadow=False)
-            return
+            self._draw_glass_pill_chip((w // 2, 56), round_label, color=INK)
 
         playing = self.clip_player.is_playing() and not self.clip_player.buzz_paused()
-        pulse_rate = 5.0 if playing else 1.15
-        idle_amp = 0.28
+        pulse_rate = 4.4 if playing else 1.1
+        idle_amp = 0.22
         bar_count = max(28, min(64, w // 16))
         levels, audio_synced = self.clip_player.get_visual_levels(bar_count)
 
-        bar_w = max(3, (w - 160) // (bar_count * 2))
-        gap = max(2, bar_w // 3)
+        bar_w = max(4, (w - 200) // (bar_count * 2))
+        gap = max(3, bar_w // 2)
         total_w = bar_count * bar_w + (bar_count - 1) * gap
         bx = w // 2 - total_w // 2
-        by = h // 2 + 40
-        max_h = min(220, int(h * 0.38))
-        colors = (ACCENT_CYAN, ACCENT_PINK, ACCENT_GREEN, ACCENT_YELLOW, PURPLE)
+        # During wait phases the action area takes the bottom half, so the
+        # waveform moves up to leave room for the buttons / numpad.
+        in_wait = st.playing_phase in (
+            PlayingPhase.WAIT_REVEAL,
+            PlayingPhase.WAIT_CONFIRM,
+            PlayingPhase.WAIT_ADVANCE,
+        )
+        by = (h // 2 - 80) if in_wait else (h // 2 + 50)
+        max_h = min(220, int(h * 0.36))
+
+        # Single off-white tonal waveform sitting on the background.
+        bar_color = (240, 244, 252)
         for i in range(bar_count):
             if audio_synced and i < len(levels):
                 norm = float(levels[i])
             else:
                 phase = t * pulse_rate + i * 0.45
                 norm = (0.5 + 0.5 * math.sin(phase)) * idle_amp
-            height = int(10 + (max_h - 10) * norm)
-            color = colors[i % len(colors)]
+            height = max(6, int(10 + (max_h - 10) * norm))
             x = bx + i * (bar_w + gap)
             slab = pygame.Rect(x, by - height, bar_w, height)
-            pygame.draw.rect(
-                self.screen,
-                doodle._shade(color, 0.42),
-                slab.move(0, 4),
-                border_radius=4,
-            )
-            pygame.draw.rect(self.screen, color, slab, border_radius=4)
+            radius = max(2, bar_w // 2)
+            pygame.draw.rect(self.screen, bar_color, slab, border_radius=radius)
 
-        if st.guessed_player is not None:
-            draw_doodle_text(
-                self.screen,
-                self.L.PLAYING_BUZZ_LOCK.format(n=st.guessed_player),
-                self.theme.body_font,
-                ACCENT_YELLOW,
-                (w // 2, by + 28),
-                anchor="center",
-                shadow=False,
-            )
-
-        draw_doodle_text(self.screen, self.L.PLAYING_NOTE,
-                          self.theme.small_font, INK_DIM,
-                          (w // 2, h - 80), anchor="center", shadow=False)
+        # Rich action area beneath the waveform — only during wait phases.
+        # Anchored relative to the (moved-up) waveform so the buttons /
+        # numpad never collide with the bars.
+        self._draw_playing_action_panel(by + 70, t)
 
 
 PRESENT_PORT = 8090

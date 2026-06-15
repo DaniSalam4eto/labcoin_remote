@@ -41,9 +41,21 @@ except Exception:  # pragma: no cover - missing optional dep
 BLE_DEVICE_NAME = "OLED-Music"
 BLE_CHAR_WIFI = "7a9e0b91-2d6e-4a7f-9e3c-5a0f64c2e011"
 TCP_PORT = 3333
-RECONNECT_DELAY_S = 15.0
-BLE_SCAN_TIMEOUT_S = 12.0
 WIFI_NEG_TIMEOUT_S = 30.0
+
+# Auto-reconnect, no human input. We hammer the link fast for the first
+# SEARCH_MODE_AFTER consecutive failures, then ease into a slower "search mode"
+# that runs forever until the remote shows up again. A short BLE scan (it
+# returns instantly once the device is seen) lets failed tries cycle quickly so
+# we can hit the target attempt rates.
+FAST_ATTEMPTS_PER_MIN = 15
+SEARCH_ATTEMPTS_PER_MIN = 5
+SEARCH_MODE_AFTER = 30
+BLE_SCAN_TIMEOUT_S = 3.0
+# A session must stay up at least this long to count as a real connection; a
+# connect-then-instantly-drop loop keeps counting as failures so search mode is
+# still reached.
+MIN_SESSION_S = 3.0
 
 # Button index -> friendly name. Same mapping as send_song.py so the OLED
 # echo screen stays consistent across both tools.
@@ -82,10 +94,11 @@ NUMPAD_BUTTONS = {
 class Event:
     """Anything the worker thread wants the GUI to know about."""
 
-    kind: str           # "status" | "error" | "connected" | "button" | "disconnected"
+    kind: str           # "status" | "error" | "connected" | "button" | "disconnected" | "volume"
     text: str = ""
     button: Optional[int] = None
     digit: Optional[int] = None  # populated for button events that map to a numpad digit
+    volume: Optional[float] = None  # 0.0..1.0, populated for "volume" events
 
 
 def _sanitize_field(value: str) -> str:
@@ -184,6 +197,7 @@ class Esp32Connector:
         self._tcp_lock = threading.Lock()
         self._tcp_sock: Optional[socket.socket] = None
         self._connected = False
+        self._session_connected_at: Optional[float] = None
 
     # ---- public API used by the GUI ---------------------------------------
 
@@ -219,18 +233,9 @@ class Esp32Connector:
     def request_immediate_reconnect(self) -> None:
         self._reconnect_now.set()
 
-    def send_song(self, artist: str, title: str) -> bool:
-        """Push ``"artist|title\\n"`` to the OLED. No-op when offline.
+    def _send_line(self, line: bytes) -> bool:
+        """Write one already-encoded line to the OLED. No-op when offline."""
 
-        Matches the protocol implemented in ``send_song.py`` and the ESP32
-        firmware: the remote reads two fields separated by ``|`` and a
-        trailing newline, then prints them on its OLED. Returns ``True``
-        on a successful write.
-        """
-
-        artist_clean = _sanitize_field(artist) or "—"
-        title_clean = _sanitize_field(title) or "—"
-        line = f"{artist_clean}|{title_clean}\n".encode("utf-8")
         with self._tcp_lock:
             sock = self._tcp_sock
         if sock is None:
@@ -241,10 +246,54 @@ class Esp32Connector:
         except OSError:
             return False
 
-    def send_leaderboard(self, line1: str, line2: str) -> bool:
-        """Push two short lines to the OLED (same ``line1|line2`` protocol as songs)."""
+    def send_song(self, artist: str, title: str, hold_ms: int = 0) -> bool:
+        """Push the now-playing panel to the OLED. No-op when offline.
 
-        return self.send_song(line1, line2)
+        Sends ``SONG|artist|title|hold_ms`` (see the firmware protocol). The
+        panel stays on the remote until the host pushes the next command, so it
+        lasts as long as the clip actually plays. ``hold_ms`` (the real clip
+        length) drives the countdown bar; ``0`` shows the panel with no bar.
+        Returns ``True`` on a successful write.
+        """
+
+        artist_clean = _sanitize_field(artist) or "—"
+        title_clean = _sanitize_field(title) or "—"
+        hold = max(0, int(hold_ms))
+        line = f"SONG|{artist_clean}|{title_clean}|{hold}\n".encode("utf-8")
+        return self._send_line(line)
+
+    def send_top3(self, rows: list[tuple[str, int]]) -> bool:
+        """Push a Top-3 leaderboard (``RANK|label:score|...``) to the OLED.
+
+        ``rows`` is ``(label, score)`` already sorted best-first; only the first
+        three are shown. No-op when offline.
+        """
+
+        parts = ["RANK"]
+        for label, score in rows[:3]:
+            lab = _sanitize_field(label).replace(":", " ") or "?"
+            parts.append(f"{lab}:{int(score)}")
+        line = ("|".join(parts) + "\n").encode("utf-8")
+        return self._send_line(line)
+
+    def send_countdown(self, text: str) -> bool:
+        """Push one big countdown glyph (``CD|text``) to the OLED, e.g. "3" or
+        "GO!". Mirrors the PC's pre-round countdown. No-op when offline."""
+
+        glyph = _sanitize_field(text) or "?"
+        return self._send_line(f"CD|{glyph}\n".encode("utf-8"))
+
+    def send_idle(self) -> bool:
+        """Return the OLED to its idle logo (``IDLE``). No-op when offline."""
+
+        return self._send_line(b"IDLE\n")
+
+    def send_reset(self) -> bool:
+        """Reboot the remote over the network (``RESET``) — same effect as its
+        physical RESET button. Returns ``True`` if the command was sent (the
+        link then drops while the ESP restarts). No-op when offline."""
+
+        return self._send_line(b"RESET\n")
 
     def poll_events(self) -> list[Event]:
         out: list[Event] = []
@@ -258,27 +307,50 @@ class Esp32Connector:
     # ---- worker -----------------------------------------------------------
 
     def _emit(self, kind: str, text: str = "", button: Optional[int] = None,
-              digit: Optional[int] = None) -> None:
-        self._events.put(Event(kind=kind, text=text, button=button, digit=digit))
+              digit: Optional[int] = None, volume: Optional[float] = None) -> None:
+        self._events.put(
+            Event(kind=kind, text=text, button=button, digit=digit, volume=volume)
+        )
 
     def _run_loop(self) -> None:
         if not HAVE_BLEAK:
             self._emit("error", "Python package 'bleak' is not installed.")
             return
-        backoff_until = 0.0
+        fail_count = 0
         while not self._stop.is_set():
-            now = time.monotonic()
-            if now < backoff_until and not self._reconnect_now.is_set():
-                time.sleep(0.2)
-                continue
+            attempt_started = time.monotonic()
             self._reconnect_now.clear()
+            self._session_connected_at = None
             try:
                 asyncio.run(self._one_cycle())
+                # _one_cycle returns once a session ended. Only count it as a
+                # real success if the link actually stayed up — a connect-then-
+                # instantly-drop loop must still escalate to search mode.
+                started = self._session_connected_at
+                if started is not None and (time.monotonic() - started) >= MIN_SESSION_S:
+                    fail_count = 0
+                else:
+                    fail_count += 1
             except Exception as exc:  # noqa: BLE001
                 self._emit("error", f"Connection error: {exc}")
+                fail_count += 1
             self._connected = False
             self._emit("disconnected")
-            backoff_until = time.monotonic() + RECONNECT_DELAY_S
+            if self._stop.is_set():
+                break
+            # Pace the next attempt to the target rate for the current mode, and
+            # surface the search screen in lock-step with the slower rate.
+            in_search = fail_count >= SEARCH_MODE_AFTER
+            if in_search:
+                self._emit("searching", text=str(fail_count))
+            rate = SEARCH_ATTEMPTS_PER_MIN if in_search else FAST_ATTEMPTS_PER_MIN
+            interval = 60.0 / float(max(1, rate))
+            deadline = attempt_started + interval
+            while not self._stop.is_set() and time.monotonic() < deadline:
+                if self._reconnect_now.is_set():
+                    self._reconnect_now.clear()
+                    break
+                time.sleep(0.1)
 
     async def _one_cycle(self) -> None:
         self._emit("status", "Reading Wi-Fi profile...")
@@ -337,6 +409,7 @@ class Esp32Connector:
         with self._tcp_lock:
             self._tcp_sock = sock
         self._connected = True
+        self._session_connected_at = time.monotonic()
         self._emit("connected", f"{host}:{port}")
         try:
             self._reader_loop(sock)
@@ -367,6 +440,16 @@ class Esp32Connector:
                 self._dispatch(text, sock)
 
     def _dispatch(self, text: str, sock: socket.socket) -> None:
+        # Volume knob updates from the ESP potentiometer (0..100 -> 0.0..1.0).
+        if text.startswith("VOL:"):
+            try:
+                level = int(text[4:].strip())
+            except ValueError:
+                return
+            level = max(0, min(100, level))
+            self._emit("volume", volume=level / 100.0)
+            return
+
         num_text = ""
         if text.startswith("BTN:"):
             num_text = text[4:].strip()
@@ -383,10 +466,6 @@ class Esp32Connector:
         digit = NUMPAD_BUTTONS.get(num)
         self._emit("button", text=BUTTON_NAMES.get(num, f"Бутон {num}"),
                    button=num, digit=digit)
-
-        # Echo a friendly name back to the OLED (matches send_song.py behavior).
-        name = BUTTON_NAMES.get(num, f"Бутон {num}")
-        try:
-            sock.sendall(f"{name}|pressed\n".encode("utf-8"))
-        except OSError:
-            pass
+        # Note: we intentionally do NOT echo the button name back to the OLED.
+        # That used to flash a "<button>|pressed" panel on every press; the
+        # remote now stays on the song / leaderboard the host pushed.

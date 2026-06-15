@@ -28,7 +28,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+from bundle_paths import app_base_dir
+
+PROJECT_ROOT = app_base_dir()
 DEFAULT_DATA_DIR = PROJECT_ROOT / "data"
 INDEX_VERSION = 1
 

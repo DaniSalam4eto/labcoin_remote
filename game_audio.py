@@ -195,6 +195,9 @@ class ClipPlayer:
         self._viz_smooth: list[float] | None = None
         self._viz_peak_follow: float = 1200.0
         self._manual_pause: bool = False
+        # Clips always play at full volume (the on-screen volume manager was
+        # removed). Kept as a constant so playback stays at 100%.
+        self._current_length_s: float = 0.0
 
     # ---- setup ----------------------------------------------------------
 
@@ -299,8 +302,13 @@ class ClipPlayer:
 
     # ---- playback -------------------------------------------------------
 
-    def play(self, clip_path: Path, volume: float = 0.9) -> bool:
-        """Stop any current clip and start ``clip_path``.
+    def current_length_s(self) -> float:
+        """Length of the clip loaded by the last :meth:`play` (seconds)."""
+
+        return self._current_length_s
+
+    def play(self, clip_path: Path) -> bool:
+        """Stop any current clip and start ``clip_path`` at full volume.
 
         Returns ``True`` on success, ``False`` if the mixer is unusable
         or decoding failed (the caller can keep going silently).
@@ -313,9 +321,13 @@ class ClipPlayer:
             wav = self._playable_path(clip_path)
             pcm_mono, vz_rate = self._wav_to_mono_pcm(wav)
             sound = pygame.mixer.Sound(str(wav))
-            sound.set_volume(max(0.0, min(1.0, volume)))
+            sound.set_volume(1.0)
             self._sound = sound
             self._channel = sound.play()
+            try:
+                self._current_length_s = float(sound.get_length())
+            except pygame.error:
+                self._current_length_s = 0.0
             self._viz_pcm = pcm_mono if len(pcm_mono) > 64 else None
             self._viz_rate = vz_rate
             self._playback_start_mono = time.monotonic()
