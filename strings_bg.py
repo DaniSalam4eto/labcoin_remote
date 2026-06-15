@@ -6,6 +6,22 @@ from __future__ import annotations
 import re
 
 
+def __getattr__(name: str):
+    """Fall back to the English string for any key not defined here.
+
+    Keeps the app from crashing if this translation is ever a step behind the
+    code (e.g. a partial `git pull`): a missing Bulgarian label just shows in
+    English instead of raising AttributeError.
+    """
+    if not name.startswith("__"):
+        import strings_en
+        try:
+            return getattr(strings_en, name)
+        except AttributeError:
+            pass
+    raise AttributeError(f"module 'strings_bg' has no attribute {name!r}")
+
+
 WINDOW_TITLE = "Labcoin - музикално дистанционно"
 
 STATUS_DEFAULT = "Натиснете СТАРТ, за да потърсите дистанционното."
