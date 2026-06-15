@@ -1,0 +1,24 @@
+{
+  "id": "V_RGO_BORO_PURVI_-_MRUSNO",
+  "artist": "V:RGO, BORO PURVI",
+  "title": "MRUSNO",
+  "origin": "bg",
+  "added_at": "2026-05-14T19:55:38Z",
+  "duration": 178.282812,
+  "youtube_id": "vtadyfE_Grk",
+  "youtube_title": "V:RGO, BORO PURVI - MRUSNO [Official Video]",
+  "youtube_url": "https://www.youtube.com/watch?v=vtadyfE_Grk",
+  "chart_source": "manual-url",
+  "clip_positions": [
+    25.24415085808023,
+    68.88172477990521,
+    98.97664588450766,
+    127.64593396154334
+  ],
+  "clips": [
+    "clip_1.m4a",
+    "clip_2.m4a",
+    "clip_3.m4a",
+    "clip_4.m4a"
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "id": "Taylor_Swift_-_Blank_Space",
+  "artist": "Taylor Swift",
+  "title": "Blank Space",
+  "origin": "global",
+  "added_at": "2026-05-14T20:05:06Z",
+  "duration": 272.486168,
+  "youtube_id": "e-ORhEE9VVg",
+  "youtube_title": "Taylor Swift - Blank Space",
+  "youtube_url": "https://www.youtube.com/watch?v=e-ORhEE9VVg",
+  "chart_source": "manual-url",
+  "clip_positions": [
+    49.03423471650567,
+    111.05532864744055,
+    172.441181182073,
+    213.05102218461866
+  ],
+  "clips": [
+    "clip_1.m4a",
+    "clip_2.m4a",
+    "clip_3.m4a",
+    "clip_4.m4a"
+  ]
+}

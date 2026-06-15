@@ -290,10 +290,9 @@ def load_image_alpha(path: Path) -> Optional[pygame.Surface]:
     if suffix == ".avif":
         try:
             from PIL import Image  # type: ignore
-            try:
-                import pillow_avif  # noqa: F401  (registers AVIF plugin)
-            except Exception:
-                pass
+            # Pillow 11.3+ decodes AVIF natively. The old `pillow-avif-plugin`
+            # is obsolete and SEGFAULTS on import against Pillow 12 (a C crash
+            # that a try/except can't catch), so we must not import it.
             img = Image.open(path).convert("RGBA")
             return pygame.image.frombuffer(
                 img.tobytes(), img.size, "RGBA"

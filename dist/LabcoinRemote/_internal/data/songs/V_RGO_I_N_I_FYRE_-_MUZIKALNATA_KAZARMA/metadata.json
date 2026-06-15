@@ -1,0 +1,24 @@
+{
+  "id": "V_RGO_I_N_I_FYRE_-_MUZIKALNATA_KAZARMA",
+  "artist": "V:RGO, I.N.I., FYRE",
+  "title": "MUZIKALNATA KAZARMA",
+  "origin": "bg",
+  "added_at": "2026-05-14T19:32:18Z",
+  "duration": 265.450522,
+  "youtube_id": "XmKukMwHBVQ",
+  "youtube_title": "V:RGO, I.N.I., FYRE - MUZIKALNATA KAZARMA [Official Video]",
+  "youtube_url": "https://www.youtube.com/watch?v=XmKukMwHBVQ",
+  "chart_source": "manual-url",
+  "clip_positions": [
+    54.83361222036064,
+    76.22546901071777,
+    142.6321580484397,
+    219.27367082679748
+  ],
+  "clips": [
+    "clip_1.m4a",
+    "clip_2.m4a",
+    "clip_3.m4a",
+    "clip_4.m4a"
+  ]
+}

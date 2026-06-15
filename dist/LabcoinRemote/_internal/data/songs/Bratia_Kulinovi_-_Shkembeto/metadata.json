@@ -1,0 +1,24 @@
+{
+  "id": "Bratia_Kulinovi_-_Shkembeto",
+  "artist": "Bratia Kulinovi",
+  "title": "Shkembeto",
+  "origin": "bg",
+  "added_at": "2026-05-14T19:45:25Z",
+  "duration": 211.162268,
+  "youtube_id": "MwLy-EvoD9E",
+  "youtube_title": "Bratia Kulinovi  Shkembeto  (Братя Кулинови Шкембето)",
+  "youtube_url": "https://www.youtube.com/watch?v=MwLy-EvoD9E",
+  "chart_source": "manual-url",
+  "clip_positions": [
+    24.30892982703913,
+    84.58420307915686,
+    111.94322137765738,
+    159.88776605701483
+  ],
+  "clips": [
+    "clip_1.m4a",
+    "clip_2.m4a",
+    "clip_3.m4a",
+    "clip_4.m4a"
+  ]
+}

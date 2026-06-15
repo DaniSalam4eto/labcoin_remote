@@ -1,0 +1,24 @@
+{
+  "id": "Justin_Bieber_-_STAY",
+  "artist": "Justin Bieber",
+  "title": "STAY",
+  "origin": "global",
+  "added_at": "2026-05-14T20:01:35Z",
+  "duration": 157.709932,
+  "youtube_id": "kTJczUoc26U",
+  "youtube_title": "The Kid LAROI, Justin Bieber - STAY (Official Video)",
+  "youtube_url": "https://www.youtube.com/watch?v=kTJczUoc26U",
+  "chart_source": "manual-url",
+  "clip_positions": [
+    19.330427136955233,
+    51.61018399509335,
+    85.66280223250435,
+    123.1473310917958
+  ],
+  "clips": [
+    "clip_1.m4a",
+    "clip_2.m4a",
+    "clip_3.m4a",
+    "clip_4.m4a"
+  ]
+}

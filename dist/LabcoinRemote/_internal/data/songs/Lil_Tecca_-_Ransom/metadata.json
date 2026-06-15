@@ -1,0 +1,24 @@
+{
+  "id": "Lil_Tecca_-_Ransom",
+  "artist": "Lil Tecca",
+  "title": "Ransom",
+  "origin": "global",
+  "added_at": "2026-05-14T20:04:39Z",
+  "duration": 147.887891,
+  "youtube_id": "1XzY2ij_vL4",
+  "youtube_title": "Lil Tecca - Ransom (Official Music Video)",
+  "youtube_url": "https://www.youtube.com/watch?v=1XzY2ij_vL4",
+  "chart_source": "manual-url",
+  "clip_positions": [
+    15.371995482304936,
+    58.81172462513244,
+    87.75430796855923,
+    104.84921896281696
+  ],
+  "clips": [
+    "clip_1.m4a",
+    "clip_2.m4a",
+    "clip_3.m4a",
+    "clip_4.m4a"
+  ]
+}
