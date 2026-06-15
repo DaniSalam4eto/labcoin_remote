@@ -19,6 +19,11 @@ _DEFAULTS: dict = {
     # User has connected + passed the button check at least once. After that,
     # launches auto-connect and skip straight into the game.
     "setup_completed": False,
+    # Optional manual Wi-Fi creds to hand to the remote, used instead of OS
+    # auto-detection. Handy on a headless Raspberry Pi where the saved password
+    # cannot be read without elevated rights. Leave blank to auto-detect.
+    "wifi_ssid": "",
+    "wifi_password": "",
 }
 
 

@@ -24,6 +24,7 @@ import asyncio
 import queue
 import socket
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -186,6 +187,57 @@ def detect_windows_wifi() -> WifiInfo:
     return WifiInfo(ssid=ssid, password=password, band_ghz=band, channel=channel, radio_type=radio)
 
 
+def _band_from_channel(channel: int) -> float:
+    if 1 <= channel <= 14:
+        return 2.4
+    if channel >= 32:
+        return 5.0
+    return 0.0
+
+
+def _nmcli_active_field(field: str) -> str:
+    """Return ``field`` for the currently-active Wi-Fi network from nmcli."""
+    out = _run(["nmcli", "-t", "-f", f"ACTIVE,{field}", "dev", "wifi"])
+    for line in out.splitlines():
+        if line.startswith("yes:"):
+            return line[4:].strip()
+    return ""
+
+
+def detect_linux_wifi() -> WifiInfo:
+    """Active Wi-Fi profile on Linux (Raspberry Pi OS), via NetworkManager.
+
+    SSID + channel come from ``nmcli``; the saved PSK is read with
+    ``nmcli -s`` (works for the active desktop user; may need elevated rights
+    on a headless setup — fall back to a manual override in that case).
+    """
+    ssid = _nmcli_active_field("SSID")
+    if not ssid:
+        ssid = _run(["iwgetid", "-r"]).strip()
+    try:
+        channel = int(_nmcli_active_field("CHAN") or "0")
+    except ValueError:
+        channel = 0
+    password = ""
+    if ssid:
+        password = _run([
+            "nmcli", "-s", "-g", "802-11-wireless-security.psk",
+            "connection", "show", ssid,
+        ]).strip()
+    return WifiInfo(ssid=ssid, password=password,
+                    band_ghz=_band_from_channel(channel),
+                    channel=channel, radio_type="")
+
+
+def detect_wifi() -> WifiInfo:
+    """Active Wi-Fi profile for the current OS (Windows or Linux/Raspberry Pi)."""
+    if sys.platform == "win32":
+        return detect_windows_wifi()
+    if sys.platform.startswith("linux"):
+        return detect_linux_wifi()
+    return WifiInfo(ssid="", password="", band_ghz=0.0, channel=0, radio_type="")
+
+
 class Esp32Connector:
     """Owns the BLE+TCP worker. GUI calls `start()` then polls events each frame."""
 
@@ -198,6 +250,9 @@ class Esp32Connector:
         self._tcp_sock: Optional[socket.socket] = None
         self._connected = False
         self._session_connected_at: Optional[float] = None
+        # Optional manual Wi-Fi creds (used instead of OS auto-detect when set —
+        # e.g. on a headless Pi where the PSK can't be read automatically).
+        self._wifi_override: Optional[WifiInfo] = None
 
     # ---- public API used by the GUI ---------------------------------------
 
@@ -232,6 +287,19 @@ class Esp32Connector:
 
     def request_immediate_reconnect(self) -> None:
         self._reconnect_now.set()
+
+    def set_wifi_credentials(self, ssid: str, password: str) -> None:
+        """Override OS Wi-Fi auto-detection with explicit creds (or clear it).
+
+        Pass an empty ``ssid`` to go back to auto-detecting. Useful on a
+        headless Pi where the saved password can't be read without elevation.
+        """
+        if ssid:
+            self._wifi_override = WifiInfo(
+                ssid=ssid, password=password or "",
+                band_ghz=0.0, channel=0, radio_type="manual")
+        else:
+            self._wifi_override = None
 
     def _send_line(self, line: bytes) -> bool:
         """Write one already-encoded line to the OLED. No-op when offline."""
@@ -354,7 +422,7 @@ class Esp32Connector:
 
     async def _one_cycle(self) -> None:
         self._emit("status", "Reading Wi-Fi profile...")
-        wifi = detect_windows_wifi()
+        wifi = self._wifi_override or detect_wifi()
         if not wifi.ssid:
             raise RuntimeError("No active Wi-Fi connection on this PC.")
         if wifi.band_ghz == 5.0:

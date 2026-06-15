@@ -373,6 +373,13 @@ class App:
             autostart.enable()
             self.config["autostart_initialized"] = True
             app_config.save(self.config)
+        # Optional manual Wi-Fi creds (mainly for a headless Raspberry Pi where
+        # the saved password can't be auto-read); blank = OS auto-detect.
+        cfg_ssid = str(self.config.get("wifi_ssid") or "").strip()
+        if cfg_ssid:
+            self.connector.set_wifi_credentials(
+                cfg_ssid, str(self.config.get("wifi_password") or ""))
+
         # Returning users (setup already done once) auto-connect on launch and
         # skip straight past the setup screens into the game.
         self._auto_connect_pending = bool(self.config.get("setup_completed"))

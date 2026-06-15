@@ -1,0 +1,2 @@
+# Shell scripts must stay LF so they run on the Raspberry Pi (CRLF breaks bash).
+*.sh text eol=lf
